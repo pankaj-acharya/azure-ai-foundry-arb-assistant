@@ -1,4 +1,5 @@
 azure-identity
+azure-keyvault-secrets
 azure-ai-projects
 python-dotenv
 requests
