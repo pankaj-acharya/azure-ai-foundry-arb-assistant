@@ -1,0 +1,8 @@
+azure-identity
+azure-ai-projects
+python-dotenv
+requests
+beautifulsoup4
+pydantic
+rich
+pytest
