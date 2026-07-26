@@ -13,17 +13,6 @@ permissions:
 jobs:
   validate-and-deploy:
     runs-on: ubuntu-latest
-    env:
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
-      AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ vars.AZURE_AI_FOUNDRY_PROJECT_NAME }}
-      AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME: ${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
-      BLOG_URL: ${{ vars.BLOG_URL }}
-      MAX_INPUT_CHARS: ${{ vars.MAX_INPUT_CHARS }}
-      OUTPUT_FOLDER: outputs
-      LOG_LEVEL: INFO
 
     steps:
       - name: Checkout
@@ -38,6 +27,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Create runtime .env
+        shell: bash
+        run: |
+          cat > .env << 'EOF'
+          AZURE_SUBSCRIPTION_ID=${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID=${{ vars.AZURE_TENANT_ID }}
+          AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+          AZURE_AI_FOUNDRY_PROJECT_NAME=${{ vars.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+          AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
+          BLOG_URL=${{ vars.BLOG_URL }}
+          MAX_INPUT_CHARS=${{ vars.MAX_INPUT_CHARS }}
+          OUTPUT_FOLDER=outputs
+          LOG_LEVEL=INFO
+          EOF
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2

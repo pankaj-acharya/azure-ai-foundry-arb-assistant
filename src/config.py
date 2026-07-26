@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -44,7 +43,6 @@ class Settings(BaseModel):
         if not value.strip():
             raise ValueError("BLOG_URL is required.")
         return value
-
 
 def load_settings() -> Settings:
     """Load settings from `.env` and process environment variables."""
