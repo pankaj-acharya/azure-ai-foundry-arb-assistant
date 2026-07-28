@@ -254,10 +254,8 @@ def _preflight_chat_probe(client: Any, model_name: str) -> tuple[bool, str]:
         with client.get_openai_client() as openai_client:
             response = openai_client.responses.create(
                 model=model_name,
-                input=[
-                    {"role": "system", "content": "Reply with one word: ok"},
-                    {"role": "user", "content": "ping"},
-                ],
+                instructions="Reply with one word: ok",
+                input="ping",
                 max_output_tokens=16,
                 temperature=0,
             )
