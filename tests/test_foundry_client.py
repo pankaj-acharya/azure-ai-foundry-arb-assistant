@@ -109,3 +109,10 @@ def test_invoke_model_raises_clear_error_when_no_supported_apis(monkeypatch: pyt
     client = FoundryModelClient(_FakeSettings())
     with pytest.raises(RuntimeError, match="does not expose supported model invocation APIs"):
         client.invoke_model("system prompt", "user prompt")
+
+
+def test_extract_response_text_supports_responses_output_message_shape() -> None:
+    content_item = SimpleNamespace(text="hello from responses output")
+    message_item = SimpleNamespace(type="message", content=[content_item])
+    response = SimpleNamespace(output=[message_item], choices=None)
+    assert FoundryModelClient._extract_response_text(response) == "hello from responses output"

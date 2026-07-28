@@ -218,6 +218,21 @@ class FoundryModelClient:
 
     @staticmethod
     def _extract_response_text(response: Any) -> str:
+        output_items = getattr(response, "output", None)
+        if output_items:
+            text_chunks: list[str] = []
+            for item in output_items:
+                item_type = getattr(item, "type", None)
+                if item_type != "message":
+                    continue
+                content_items = getattr(item, "content", None) or []
+                for content_item in content_items:
+                    text_value = getattr(content_item, "text", None)
+                    if isinstance(text_value, str) and text_value.strip():
+                        text_chunks.append(text_value.strip())
+            if text_chunks:
+                return "\n".join(text_chunks).strip()
+
         choices = getattr(response, "choices", None)
         if not choices:
             raise RuntimeError("Foundry model response had no choices.")
