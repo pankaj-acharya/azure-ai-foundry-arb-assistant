@@ -149,8 +149,7 @@ It uses:
 - `permissions: id-token: write, contents: read`
 - OIDC login (`azure/login`)
 - unit tests
-- deploy script
-- smoke test
+- one-agent Foundry smoke invocation (blocking)
 
 Required repository variables:
 - `AZURE_CLIENT_ID`
@@ -164,6 +163,11 @@ Optional but supported variables:
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_AI_FOUNDRY_PROJECT_NAME`
 - `MAX_INPUT_CHARS`
+
+Feature flag variable:
+- `ENABLE_PERSISTENT_AGENT_DEPLOY`
+  - Set to `true` to run persistent agent provisioning steps in CI.
+  - Set to `false` (or leave unset) to skip persistent provisioning and run only the one-agent smoke deployment check.
 
 You must configure federated credentials in Microsoft Entra ID for your GitHub repo/branch/environment.
 
@@ -183,6 +187,20 @@ You must configure federated credentials in Microsoft Entra ID for your GitHub r
 - Validate URL input and block private/internal targets
 - Use managed identity/OIDC in CI/CD (no client secrets)
 - Do not scrape private/authenticated content
+
+## CI deployment mode (current)
+
+The GitHub Actions workflow currently uses a simplified one-agent deployment validation path:
+
+- Runs unit tests
+- Authenticates with Azure via OIDC
+- Executes `python scripts/smoke_test_single_agent.py`
+
+This provides reliable automated validation of endpoint + model invocation without depending on SDK-specific persistent agent provisioning APIs.
+
+Persistent Foundry agent provisioning is now controlled by `ENABLE_PERSISTENT_AGENT_DEPLOY`:
+- `true`: run preflight + persistent provisioning (`deploy_foundry_agents.py`)
+- `false` or unset: skip persistent provisioning and keep one-agent smoke validation only
 
 ## Deploying Foundry agents
 
