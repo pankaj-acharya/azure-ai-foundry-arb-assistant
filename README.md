@@ -146,7 +146,7 @@ gh repo create architecture-review-board-assistant --private --source=. --remote
 Workflow file: `.github/workflows/deploy-foundry-agents.yml`
 
 It uses:
-- `permissions: id-token: write, contents: read`
+- `permissions: id-token: write, contents: read, administration: write`
 - OIDC login (`azure/login`)
 - unit tests
 - deploy script
@@ -166,6 +166,34 @@ Optional but supported variables:
 - `MAX_INPUT_CHARS`
 
 You must configure federated credentials in Microsoft Entra ID for your GitHub repo/branch/environment.
+
+### Federated credential subject claim
+
+GitHub can generate OIDC subject claims in two formats. If your repository has the enhanced
+format enabled (includes numeric user/repo IDs), the subject claim will look like:
+
+```
+repo:OWNER@USER_ID/REPO@REPO_ID:ref:refs/heads/main
+```
+
+The workflow automatically resets the repository's OIDC subject claim to the standard format
+before login:
+
+```
+repo:OWNER/REPO:ref:refs/heads/main
+```
+
+Configure the federated credential in Microsoft Entra ID using this standard subject:
+
+```
+repo:pankaj-acharya/azure-ai-foundry-arb-assistant:ref:refs/heads/main
+```
+
+If login still fails, check the `Azure Login (OIDC)` step output for the actual subject
+claim and ensure your Entra ID federated credential matches it exactly.
+
+The `administration: write` workflow permission is required for the OIDC subject claim
+reset step. This uses the built-in `GITHUB_TOKEN` and does not require any additional secrets.
 
 ## Cost control notes
 

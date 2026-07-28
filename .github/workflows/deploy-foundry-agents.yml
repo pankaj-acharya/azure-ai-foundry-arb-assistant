@@ -9,6 +9,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  administration: write
 
 jobs:
   validate-and-deploy:
@@ -46,6 +47,13 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest
+
+      - name: Reset OIDC subject claim to standard format
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PUT /repos/${{ github.repository }}/actions/oidc/customization/sub \
+            --field use_default=true
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
