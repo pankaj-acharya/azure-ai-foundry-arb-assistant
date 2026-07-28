@@ -258,7 +258,7 @@ def _preflight_chat_probe(client: Any, model_name: str) -> tuple[bool, str]:
                     {"role": "system", "content": "Reply with one word: ok"},
                     {"role": "user", "content": "ping"},
                 ],
-                max_output_tokens=8,
+                max_output_tokens=16,
                 temperature=0,
             )
             output_text = getattr(response, "output_text", None)
