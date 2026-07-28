@@ -153,16 +153,20 @@ class FoundryModelClient:
             "model": deployment,
             "instructions": system_prompt,
             "input": "\n\n".join(user_prompts).strip(),
+            "reasoning": {"effort": "minimal"},
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
-        try:
-            return responses.create(**payload)
-        except Exception as exc:
-            if not self._is_unsupported_parameter_error(exc, parameter="temperature"):
-                raise
-            payload.pop("temperature", None)
-            return responses.create(**payload)
+
+        for optional_param in ("temperature", "reasoning"):
+            try:
+                return responses.create(**payload)
+            except Exception as exc:
+                if not self._is_unsupported_parameter_error(exc, parameter=optional_param):
+                    raise
+                payload.pop(optional_param, None)
+
+        return responses.create(**payload)
 
     def _invoke_chat_completions_compatible(
         self,
