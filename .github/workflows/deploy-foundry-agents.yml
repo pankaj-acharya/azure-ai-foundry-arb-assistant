@@ -44,15 +44,15 @@ jobs:
           LOG_LEVEL=INFO
           EOF
 
+      - name: Run unit tests
+        run: python -m pytest
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Run unit tests
-        run: python -m pytest
 
       - name: Deploy/Update Foundry agents
         run: python scripts/deploy_foundry_agents.py
