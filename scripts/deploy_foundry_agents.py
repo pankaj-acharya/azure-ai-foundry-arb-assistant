@@ -264,7 +264,17 @@ def _run_preflight_checks(
     if probe_ok:
         print(f"[preflight] {probe_message}")
     else:
-        errors.append(probe_message)
+        # Some azure-ai-projects SDK builds expose agent APIs but not inference APIs.
+        # Treat this as a warning so CI can still deploy agents automatically.
+        inference_surface_missing = (
+            "does not expose inference APIs" in probe_message
+            or "No supported chat-completions method found" in probe_message
+        )
+        if inference_surface_missing:
+            print(f"[preflight] Warning: {probe_message}")
+            print("[preflight] Continuing because agent provisioning APIs are available.")
+        else:
+            errors.append(probe_message)
 
     return len(errors) == 0, errors
 
