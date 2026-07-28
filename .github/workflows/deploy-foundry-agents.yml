@@ -56,8 +56,11 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Preflight Foundry checks
+        run: python scripts/deploy_foundry_agents.py --preflight-only --strict
+
       - name: Deploy/Update Foundry agents
-        run: python scripts/deploy_foundry_agents.py
+        run: python scripts/deploy_foundry_agents.py --strict
 
       - name: Run smoke test
         run: python scripts/smoke_test.py
