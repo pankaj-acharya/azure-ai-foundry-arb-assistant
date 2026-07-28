@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+import src.foundry_client as foundry_client_module
+from src.foundry_client import FoundryModelClient
+
+
+class _FakeSettings:
+    azure_ai_foundry_project_endpoint = "https://example.services.ai.azure.com/api/projects/demo"
+    azure_ai_foundry_model_deployment_name = "gpt-4.1-mini"
+
+
+class _FakeOpenAIResponsesClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.responses = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text="  generated response  ")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_invoke_model_uses_get_openai_client_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    openai_client = _FakeOpenAIResponsesClient()
+
+    class _FakeProjectClient:
+        def __init__(self, endpoint: str, credential: object):
+            self.endpoint = endpoint
+            self.credential = credential
+
+        def get_openai_client(self):
+            return openai_client
+
+    monkeypatch.setattr(foundry_client_module, "DefaultAzureCredential", lambda **kwargs: object())
+    monkeypatch.setattr(foundry_client_module, "AIProjectClient", _FakeProjectClient)
+
+    client = FoundryModelClient(_FakeSettings())
+    result = client.invoke_model("system prompt", "user prompt", temperature=0.1, max_tokens=128)
+
+    assert result == "generated response"
+    assert openai_client.calls
+    assert openai_client.calls[0]["model"] == "gpt-4.1-mini"
+    assert openai_client.calls[0]["max_output_tokens"] == 128
+
+
+def test_invoke_model_raises_clear_error_when_no_supported_apis(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeProjectClientNoApis:
+        def __init__(self, endpoint: str, credential: object):
+            self.endpoint = endpoint
+            self.credential = credential
+
+    monkeypatch.setattr(foundry_client_module, "DefaultAzureCredential", lambda **kwargs: object())
+    monkeypatch.setattr(foundry_client_module, "AIProjectClient", _FakeProjectClientNoApis)
+
+    client = FoundryModelClient(_FakeSettings())
+    with pytest.raises(RuntimeError, match="does not expose supported model invocation APIs"):
+        client.invoke_model("system prompt", "user prompt")

@@ -58,15 +58,45 @@ class FoundryModelClient:
             return self._invoke_with_known_sdk_shapes(messages, temperature, max_tokens)
         except Exception as exc:
             raise RuntimeError(
-                "Model invocation failed. Ensure Azure authentication is available (az login), "
-                "project endpoint is correct, and deployment name exists in the Foundry project."
+                f"Model invocation failed using azure-ai-projects client: {exc}"
             ) from exc
 
     def _invoke_with_known_sdk_shapes(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
         deployment = self.settings.azure_ai_foundry_model_deployment_name
+        openai_factory = getattr(self.client, "get_openai_client", None)
+        if callable(openai_factory):
+            with openai_factory() as openai_client:
+                responses = getattr(openai_client, "responses", None)
+                if responses is not None and hasattr(responses, "create"):
+                    response = responses.create(
+                        model=deployment,
+                        input=messages,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                    )
+                    output_text = getattr(response, "output_text", None)
+                    if isinstance(output_text, str) and output_text.strip():
+                        return output_text.strip()
+                    return self._extract_response_text(response)
+
+                chat = getattr(openai_client, "chat", None)
+                if chat is not None:
+                    completions = getattr(chat, "completions", None)
+                    if completions is not None and hasattr(completions, "create"):
+                        response = completions.create(
+                            model=deployment,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                        )
+                        return self._extract_response_text(response)
+
         inference = getattr(self.client, "inference", None)
         if inference is None:
-            raise RuntimeError("Current azure-ai-projects SDK does not expose inference APIs on AIProjectClient.")
+            raise RuntimeError(
+                "Current azure-ai-projects SDK does not expose supported model invocation APIs "
+                "(get_openai_client or inference)."
+            )
 
         # Shape 1: inference.get_chat_completions(...)
         if hasattr(inference, "get_chat_completions"):
