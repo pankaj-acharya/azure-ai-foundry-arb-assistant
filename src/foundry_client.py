@@ -68,11 +68,12 @@ class FoundryModelClient:
             with openai_factory() as openai_client:
                 responses = getattr(openai_client, "responses", None)
                 if responses is not None and hasattr(responses, "create"):
-                    response = responses.create(
-                        model=deployment,
-                        input=messages,
+                    response = self._invoke_responses_compatible(
+                        responses=responses,
+                        deployment=deployment,
+                        messages=messages,
                         temperature=temperature,
-                        max_output_tokens=max_tokens,
+                        max_tokens=max_tokens,
                     )
                     output_text = getattr(response, "output_text", None)
                     if isinstance(output_text, str) and output_text.strip():
@@ -83,8 +84,9 @@ class FoundryModelClient:
                 if chat is not None:
                     completions = getattr(chat, "completions", None)
                     if completions is not None and hasattr(completions, "create"):
-                        response = completions.create(
-                            model=deployment,
+                        response = self._invoke_chat_completions_compatible(
+                            completions=completions,
+                            deployment=deployment,
                             messages=messages,
                             temperature=temperature,
                             max_tokens=max_tokens,
@@ -100,8 +102,9 @@ class FoundryModelClient:
 
         # Shape 1: inference.get_chat_completions(...)
         if hasattr(inference, "get_chat_completions"):
-            response = inference.get_chat_completions(
-                model=deployment,
+            response = self._invoke_inference_chat_compatible(
+                inference=inference,
+                deployment=deployment,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -111,8 +114,9 @@ class FoundryModelClient:
         # Shape 2: inference.chat_completions.create(...)
         chat_completions = getattr(inference, "chat_completions", None)
         if chat_completions is not None and hasattr(chat_completions, "create"):
-            response = chat_completions.create(
-                model=deployment,
+            response = self._invoke_chat_completions_compatible(
+                completions=chat_completions,
+                deployment=deployment,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -122,6 +126,81 @@ class FoundryModelClient:
         raise RuntimeError(
             "No supported chat-completions invocation method found in current azure-ai-projects SDK."
         )
+
+    def _invoke_responses_compatible(
+        self,
+        *,
+        responses: Any,
+        deployment: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Any:
+        payload = {
+            "model": deployment,
+            "input": messages,
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        try:
+            return responses.create(**payload)
+        except Exception as exc:
+            if not self._is_unsupported_parameter_error(exc, parameter="temperature"):
+                raise
+            payload.pop("temperature", None)
+            return responses.create(**payload)
+
+    def _invoke_chat_completions_compatible(
+        self,
+        *,
+        completions: Any,
+        deployment: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Any:
+        payload = {
+            "model": deployment,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        try:
+            return completions.create(**payload)
+        except Exception as exc:
+            if not self._is_unsupported_parameter_error(exc, parameter="temperature"):
+                raise
+            payload.pop("temperature", None)
+            return completions.create(**payload)
+
+    def _invoke_inference_chat_compatible(
+        self,
+        *,
+        inference: Any,
+        deployment: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Any:
+        payload = {
+            "model": deployment,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        try:
+            return inference.get_chat_completions(**payload)
+        except Exception as exc:
+            if not self._is_unsupported_parameter_error(exc, parameter="temperature"):
+                raise
+            payload.pop("temperature", None)
+            return inference.get_chat_completions(**payload)
+
+    @staticmethod
+    def _is_unsupported_parameter_error(exc: Exception, *, parameter: str) -> bool:
+        message = str(exc).lower()
+        token = f"'{parameter.lower()}'"
+        return "unsupported parameter" in message and token in message
 
     @staticmethod
     def _extract_response_text(response: Any) -> str:

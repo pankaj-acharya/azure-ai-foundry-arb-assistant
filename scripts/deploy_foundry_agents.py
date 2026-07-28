@@ -257,7 +257,6 @@ def _preflight_chat_probe(client: Any, model_name: str) -> tuple[bool, str]:
                 instructions="Reply with one word: ok",
                 input="ping",
                 max_output_tokens=16,
-                temperature=0,
             )
             output_text = getattr(response, "output_text", None)
             if isinstance(output_text, str) and output_text.strip():
