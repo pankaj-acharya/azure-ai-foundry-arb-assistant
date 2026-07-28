@@ -19,6 +19,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
       AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+      ENABLE_PERSISTENT_AGENT_DEPLOY: ${{ vars.ENABLE_PERSISTENT_AGENT_DEPLOY }}
 
     steps:
       - name: Checkout
@@ -56,12 +57,27 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Show deployment mode
+        shell: bash
+        run: |
+          if [ "${ENABLE_PERSISTENT_AGENT_DEPLOY,,}" = "true" ]; then
+            echo "[mode] Persistent agent provisioning is ENABLED"
+          else
+            echo "[mode] Persistent agent provisioning is DISABLED"
+          fi
+
       - name: Preflight Foundry checks
+        if: ${{ env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'true' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'TRUE' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'True' }}
         run: python scripts/deploy_foundry_agents.py --preflight-only --strict
 
       - name: Deploy/Update Foundry agents
+        if: ${{ env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'true' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'TRUE' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'True' }}
         run: python scripts/deploy_foundry_agents.py --strict
 
-      - name: Run smoke test
-        run: python scripts/smoke_test.py
-        continue-on-error: true
+      - name: Run one-agent smoke deployment check
+        run: python scripts/smoke_test_single_agent.py
+
+      # Optional multi-agent smoke can be re-enabled after persistent provisioning is stable.
+      # - name: Run smoke test
+      #   run: python scripts/smoke_test.py
+      #   continue-on-error: true
