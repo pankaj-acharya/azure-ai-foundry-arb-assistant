@@ -136,9 +136,23 @@ class FoundryModelClient:
         temperature: float,
         max_tokens: int,
     ) -> Any:
+        system_prompt = ""
+        user_prompts: list[str] = []
+        for message in messages:
+            role = message.get("role", "")
+            content = message.get("content", "")
+            if role == "system":
+                system_prompt = content
+            elif role == "user":
+                user_prompts.append(content)
+
+        if not user_prompts:
+            user_prompts = [str(message.get("content", "")) for message in messages if "content" in message]
+
         payload = {
             "model": deployment,
-            "input": messages,
+            "instructions": system_prompt,
+            "input": "\n\n".join(user_prompts).strip(),
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
