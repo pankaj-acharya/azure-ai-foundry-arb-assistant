@@ -70,6 +70,7 @@ def test_invoke_model_uses_get_openai_client_responses(monkeypatch: pytest.Monke
     assert openai_client.calls[0]["max_output_tokens"] == 128
     assert openai_client.calls[0]["instructions"] == "system prompt"
     assert openai_client.calls[0]["input"] == "user prompt"
+    assert openai_client.calls[0]["reasoning"] == {"effort": "minimal"}
 
 
 def test_invoke_model_retries_without_temperature_when_model_rejects_it(
