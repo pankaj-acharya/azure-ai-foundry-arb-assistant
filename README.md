@@ -210,6 +210,10 @@ Run:
 python scripts/deploy_foundry_agents.py
 ```
 
+Prerequisites for persistent agent deployment:
+- `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT` must be a Foundry **project** endpoint in the form `https://<account>.services.ai.azure.com/api/projects/<project-name>`
+- The CI principal (GitHub OIDC service principal) must have Foundry project publish permissions (for example **Foundry Project Manager**) at the Foundry resource/project scope
+
 The script attempts to create/update persistent agents if your installed `azure-ai-projects` SDK supports that API shape.
 If not supported, it exits gracefully and tells you to use local orchestration prompts from `src/agent_prompts.py`.
 
