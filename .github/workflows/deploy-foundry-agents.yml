@@ -13,6 +13,12 @@ permissions:
 jobs:
   validate-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+      AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
 
     steps:
       - name: Checkout
@@ -32,11 +38,7 @@ jobs:
         shell: bash
         run: |
           cat > .env << 'EOF'
-          AZURE_SUBSCRIPTION_ID=${{ vars.AZURE_SUBSCRIPTION_ID }}
-          AZURE_TENANT_ID=${{ vars.AZURE_TENANT_ID }}
           AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
-          AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=${{ vars.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
-          AZURE_AI_FOUNDRY_PROJECT_NAME=${{ vars.AZURE_AI_FOUNDRY_PROJECT_NAME }}
           AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
           BLOG_URL=${{ vars.BLOG_URL }}
           MAX_INPUT_CHARS=${{ vars.MAX_INPUT_CHARS }}
@@ -50,9 +52,9 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy/Update Foundry agents
         run: python scripts/deploy_foundry_agents.py
