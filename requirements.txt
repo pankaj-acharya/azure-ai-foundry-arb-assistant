@@ -1,5 +1,5 @@
 azure-identity
-azure-ai-projects>=2.4.0,<2.5.0
+azure-ai-projects>=2.4.0,<3.0.0
 openai>=2.49.0,<3.0.0
 python-dotenv
 requests
