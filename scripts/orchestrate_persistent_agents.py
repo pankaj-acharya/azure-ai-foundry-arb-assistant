@@ -17,14 +17,17 @@ if str(ROOT) not in sys.path:
 
 from src.agent_prompts import (  # noqa: E402
     ARB_CHAIRPERSON_AGENT_NAME,
+    ARB_CHAIRPERSON_PROMPT,
     ARCHITECTURE_AGENT_NAME,
     COST_AGENT_NAME,
     RESILIENCY_AGENT_NAME,
     SECURITY_AGENT_NAME,
+    SPECIALIST_AGENT_PROMPTS,
     build_chairperson_user_prompt,
     build_specialist_user_prompt,
 )
 from src.config import load_settings  # noqa: E402
+from src.foundry_client import FoundryModelClient  # noqa: E402
 from src.report_writer import write_review_markdown  # noqa: E402
 from src.web_loader import fetch_public_page  # noqa: E402
 
@@ -123,42 +126,31 @@ def main() -> int:
     page = fetch_public_page(settings.blog_url, max_input_chars=settings.max_input_chars)
     specialist_input = build_specialist_user_prompt(page.title, page.url, page.text)
 
+    fallback_model_client = FoundryModelClient(settings)
     credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
     with AIProjectClient(endpoint=settings.azure_ai_foundry_project_endpoint, credential=credential) as project_client:
-        def run_architecture() -> str:
-            return _invoke_persistent_agent(
-                project_client=project_client,
-                agent_name=ARCHITECTURE_AGENT_NAME,
-                user_prompt=specialist_input,
-            )
-
-        def run_security() -> str:
-            return _invoke_persistent_agent(
-                project_client=project_client,
-                agent_name=SECURITY_AGENT_NAME,
-                user_prompt=specialist_input,
-            )
-
-        def run_cost() -> str:
-            return _invoke_persistent_agent(
-                project_client=project_client,
-                agent_name=COST_AGENT_NAME,
-                user_prompt=specialist_input,
-            )
-
-        def run_resiliency() -> str:
-            return _invoke_persistent_agent(
-                project_client=project_client,
-                agent_name=RESILIENCY_AGENT_NAME,
-                user_prompt=specialist_input,
-            )
+        def run_specialist(agent_name: str) -> str:
+            try:
+                return _invoke_persistent_agent(
+                    project_client=project_client,
+                    agent_name=agent_name,
+                    user_prompt=specialist_input,
+                )
+            except RuntimeError as exc:
+                # Some Foundry agent runs return incomplete/no text; fallback keeps orchestration reliable.
+                print(f"[persistent-orchestration] Warning: {agent_name} fallback to model deployment: {exc}")
+                return fallback_model_client.invoke_model(
+                    system_prompt=SPECIALIST_AGENT_PROMPTS[agent_name],
+                    user_prompt=specialist_input,
+                    max_tokens=1200,
+                )
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {
-                "architecture": pool.submit(run_architecture),
-                "security": pool.submit(run_security),
-                "cost": pool.submit(run_cost),
-                "resiliency": pool.submit(run_resiliency),
+                "architecture": pool.submit(run_specialist, ARCHITECTURE_AGENT_NAME),
+                "security": pool.submit(run_specialist, SECURITY_AGENT_NAME),
+                "cost": pool.submit(run_specialist, COST_AGENT_NAME),
+                "resiliency": pool.submit(run_specialist, RESILIENCY_AGENT_NAME),
             }
             specialist_outputs = {name: future.result() for name, future in futures.items()}
 
@@ -167,12 +159,20 @@ def main() -> int:
             page_url=page.url,
             specialist_outputs=specialist_outputs,
         )
-        final_report = _invoke_persistent_agent(
-            project_client=project_client,
-            agent_name=ARB_CHAIRPERSON_AGENT_NAME,
-            user_prompt=chairperson_input,
-            max_output_tokens=1200,
-        )
+        try:
+            final_report = _invoke_persistent_agent(
+                project_client=project_client,
+                agent_name=ARB_CHAIRPERSON_AGENT_NAME,
+                user_prompt=chairperson_input,
+                max_output_tokens=1800,
+            )
+        except RuntimeError as exc:
+            print(f"[persistent-orchestration] Warning: chairperson fallback to model deployment: {exc}")
+            final_report = fallback_model_client.invoke_model(
+                system_prompt=ARB_CHAIRPERSON_PROMPT,
+                user_prompt=chairperson_input,
+                max_tokens=1800,
+            )
 
     result = {
         "page": {"title": page.title, "url": page.url},
