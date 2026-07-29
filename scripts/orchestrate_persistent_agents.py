@@ -66,17 +66,31 @@ def _invoke_persistent_agent(
             ]
         )
         try:
-            response = openai_client.responses.create(
-                conversation=conversation.id,
-                max_output_tokens=max_output_tokens,
-                reasoning={"effort": "minimal"},
-            )
+            payload: dict[str, Any] = {
+                "conversation": conversation.id,
+                "max_output_tokens": max_output_tokens,
+                "reasoning": {"effort": "minimal"},
+            }
+            try:
+                response = openai_client.responses.create(**payload)
+            except Exception as exc:
+                if not _is_unsupported_reasoning_for_agent_error(exc):
+                    raise
+                payload.pop("reasoning", None)
+                response = openai_client.responses.create(**payload)
             return _extract_response_text(response)
         finally:
             try:
                 openai_client.conversations.delete(conversation_id=conversation.id)
             except Exception:
                 pass
+
+
+def _is_unsupported_reasoning_for_agent_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "'reasoning'" not in message:
+        return False
+    return ("unsupported parameter" in message) or ("not allowed when agent is specified" in message)
 
 
 def main() -> int:
