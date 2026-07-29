@@ -38,7 +38,7 @@ def main() -> int:
         system_prompt=ARCHITECTURE_AGENT_PROMPT,
         user_prompt=user_prompt,
         temperature=0,
-        max_tokens=350,
+        max_tokens=900,
     )
 
     if not response.strip():

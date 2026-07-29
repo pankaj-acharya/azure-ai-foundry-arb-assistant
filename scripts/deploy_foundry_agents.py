@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from azure.identity import DefaultAzureCredential
 
@@ -47,41 +49,104 @@ def _is_not_found_error(exc: Exception) -> bool:
     return "404" in str(exc)
 
 
-def _create_base_agent_if_missing(
-    *,
-    name: str,
-    model_name: str,
-    instructions: str,
-    create_or_update: Callable[..., Any] | None,
-    create_agent: Callable[..., Any] | None,
-) -> tuple[bool, str]:
-    """Attempt to create a missing base agent before retrying version creation."""
+def _validate_project_endpoint_format(endpoint: str) -> tuple[bool, str]:
+    """Validate Foundry endpoint shape expected by AIProjectClient."""
 
-    if callable(create_or_update):
+    if not endpoint.strip():
+        return False, "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT is empty"
+
+    parsed = urlparse(endpoint)
+    if parsed.scheme != "https":
+        return False, "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT must use https"
+
+    if not parsed.netloc.endswith(".services.ai.azure.com"):
+        return False, "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT host must end with .services.ai.azure.com"
+
+    if "/api/projects/" not in parsed.path:
+        return (
+            False,
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT must include '/api/projects/<project-name>' path segment",
+        )
+
+    return True, "Foundry project endpoint format is valid"
+
+
+def _extract_http_status_code(exc: Exception) -> int | None:
+    for attr_name in ("status_code", "status"):
+        value = getattr(exc, attr_name, None)
+        if isinstance(value, int):
+            return value
+
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+    return None
+
+
+def _extract_service_error_code(exc: Exception) -> str | None:
+    model = getattr(exc, "model", None)
+    if model is not None:
+        error_obj = getattr(model, "error", None)
+        code = getattr(error_obj, "code", None)
+        if isinstance(code, str) and code.strip():
+            return code.strip()
+
+    error_obj = getattr(exc, "error", None)
+    code = getattr(error_obj, "code", None)
+    if isinstance(code, str) and code.strip():
+        return code.strip()
+    return None
+
+
+def _extract_request_id(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+
+    for header_name in ("x-ms-request-id", "x-request-id", "x-ms-client-request-id"):
         try:
-            create_or_update(
-                {
-                    "name": name,
-                    "model": model_name,
-                    "instructions": instructions,
-                }
-            )
-            return True, "Recovered by create_or_update_agent"
-        except Exception as exc:
-            return False, f"create_or_update_agent recovery failed: {exc}"
+            header_value = headers.get(header_name)  # type: ignore[call-arg]
+            if isinstance(header_value, str) and header_value.strip():
+                return header_value.strip()
+        except Exception:
+            continue
+    return None
 
-    if callable(create_agent):
-        try:
-            create_agent(
-                model=model_name,
-                name=name,
-                instructions=instructions,
-            )
-            return True, "Recovered by create_agent"
-        except Exception as exc:
-            return False, f"create_agent recovery failed: {exc}"
 
-    return False, "No SDK method available to create missing base agent"
+def _format_exception_context(exc: Exception) -> str:
+    status_code = _extract_http_status_code(exc)
+    error_code = _extract_service_error_code(exc)
+    request_id = _extract_request_id(exc)
+    details = [f"error={str(exc).strip()}"]
+    if status_code is not None:
+        details.append(f"http_status={status_code}")
+    if error_code:
+        details.append(f"service_code={error_code}")
+    if request_id:
+        details.append(f"request_id={request_id}")
+    return ", ".join(details)
+
+
+def _is_permission_error(exc: Exception) -> bool:
+    status_code = _extract_http_status_code(exc)
+    if status_code in (401, 403):
+        return True
+
+    error_code = (_extract_service_error_code(exc) or "").lower()
+    if error_code in {"permissiondenied", "forbidden", "authorizationfailed", "unauthorized"}:
+        return True
+
+    message = str(exc).lower()
+    return "permission" in message or "authorization" in message or "forbidden" in message
+
+
+def _is_preview_feature_error(exc: Exception) -> bool:
+    error_code = (_extract_service_error_code(exc) or "").lower()
+    if error_code == "preview_feature_required":
+        return True
+    return "preview_feature_required" in str(exc).lower()
 
 
 def _deploy_with_create_or_update_agent(
@@ -145,8 +210,6 @@ def _deploy_with_create_version(
     create_version: Callable[..., Any],
     model_name: str,
     definitions: dict[str, str],
-    create_or_update: Callable[..., Any] | None,
-    create_agent: Callable[..., Any] | None,
 ) -> tuple[int, list[str]]:
     errors: list[str] = []
     success_count = 0
@@ -160,43 +223,25 @@ def _deploy_with_create_version(
             print(f"[deploy] Created agent version with create_version: {name}")
             success_count += 1
         except Exception as exc:
-            if _is_not_found_error(exc):
-                print(
-                    f"[deploy] Base agent '{name}' was not found for create_version. "
-                    "Attempting automated recovery."
+            if _is_permission_error(exc):
+                msg = (
+                    f"create_version permission failure for '{name}'. "
+                    f"Confirm Foundry role assignment for this principal. {_format_exception_context(exc)}"
                 )
-                recovered, recovery_message = _create_base_agent_if_missing(
-                    name=name,
-                    model_name=model_name,
-                    instructions=instructions,
-                    create_or_update=create_or_update,
-                    create_agent=create_agent,
+            elif _is_preview_feature_error(exc):
+                msg = (
+                    f"create_version preview feature gate for '{name}'. "
+                    "Enable required Foundry preview features. "
+                    f"{_format_exception_context(exc)}"
                 )
-                if recovered:
-                    try:
-                        definition = _build_version_definition(model_name, instructions)
-                        create_version(
-                            agent_name=name,
-                            definition=definition,
-                        )
-                        print(
-                            "[deploy] Recovery succeeded. "
-                            f"Created agent version with create_version: {name}"
-                        )
-                        success_count += 1
-                        continue
-                    except Exception as retry_exc:
-                        msg = f"create_version retry failed for '{name}': {retry_exc}"
-                        print(f"[deploy] {msg}")
-                        errors.append(msg)
-                        continue
-
-                msg = f"create_version recovery failed for '{name}': {recovery_message}"
-                print(f"[deploy] {msg}")
-                errors.append(msg)
-                continue
-
-            msg = f"create_version failed for '{name}': {exc}"
+            elif _is_not_found_error(exc):
+                msg = (
+                    f"create_version returned 404 for '{name}'. "
+                    "This usually indicates wrong project endpoint scope or missing Foundry RBAC at project/resource scope. "
+                    f"{_format_exception_context(exc)}"
+                )
+            else:
+                msg = f"create_version failed for '{name}': {_format_exception_context(exc)}"
             print(f"[deploy] {msg}")
             errors.append(msg)
     return success_count, errors
@@ -205,54 +250,93 @@ def _deploy_with_create_version(
 def _preflight_chat_probe(client: Any, model_name: str) -> tuple[bool, str]:
     """Run a minimal inference probe to validate deployment visibility."""
 
-    inference = getattr(client, "inference", None)
-    if inference is None:
-        return False, "AIProjectClient does not expose inference APIs in this SDK build"
+    try:
+        with client.get_openai_client() as openai_client:
+            response = openai_client.responses.create(
+                model=model_name,
+                instructions="Reply with one word: ok",
+                input="ping",
+                max_output_tokens=16,
+            )
+            output_text = getattr(response, "output_text", None)
+            if isinstance(output_text, str) and output_text.strip():
+                return True, "Inference probe succeeded via get_openai_client().responses.create()"
+            return True, "Inference probe succeeded via responses API"
+    except Exception as exc:
+        return False, f"Inference probe failed: {_format_exception_context(exc)}"
 
-    messages = [
-        {"role": "system", "content": "Reply with one word: ok"},
-        {"role": "user", "content": "ping"},
-    ]
+
+def _preflight_agents_list_probe(agents_api: Any) -> tuple[bool, str]:
+    """Validate that agent APIs are reachable with current principal."""
 
     try:
-        if hasattr(inference, "get_chat_completions"):
-            inference.get_chat_completions(
-                model=model_name,
-                messages=messages,
-                temperature=0,
-                max_tokens=1,
-            )
-            return True, "Inference probe succeeded via get_chat_completions"
-
-        chat_completions = getattr(inference, "chat_completions", None)
-        if chat_completions is not None and hasattr(chat_completions, "create"):
-            chat_completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=0,
-                max_tokens=1,
-            )
-            return True, "Inference probe succeeded via chat_completions.create"
-
-        return False, "No supported chat-completions method found for inference probe"
+        pager = agents_api.list(limit=1)
+        for _ in pager:
+            break
+        return True, "Agents list probe succeeded"
     except Exception as exc:
-        return False, f"Inference probe failed: {exc}"
+        return False, f"Agents list probe failed: {_format_exception_context(exc)}"
+
+
+def _preflight_create_version_probe(
+    *,
+    create_version: Callable[..., Any] | None,
+    delete_version: Callable[..., Any] | None,
+    delete_agent: Callable[..., Any] | None,
+    model_name: str,
+) -> tuple[bool, str]:
+    """Attempt a temporary create_version to verify agent publish authorization."""
+
+    if not callable(create_version):
+        return False, "create_version API is not available in current SDK surface"
+
+    probe_agent_name = f"ci-probe-{uuid.uuid4().hex[:10]}"
+    created_version = None
+    try:
+        created_version = create_version(
+            agent_name=probe_agent_name,
+            definition=_build_version_definition(model_name, "Respond with the exact word: ok"),
+            description="CI probe for Foundry publish capability",
+        )
+        version = getattr(created_version, "version", "<unknown>")
+        return True, f"create_version probe succeeded for '{probe_agent_name}' version '{version}'"
+    except Exception as exc:
+        return False, f"create_version probe failed: {_format_exception_context(exc)}"
+    finally:
+        if created_version is not None:
+            version = getattr(created_version, "version", None)
+            if callable(delete_version) and isinstance(version, str):
+                try:
+                    delete_version(agent_name=probe_agent_name, agent_version=version, force=True)
+                except Exception as cleanup_exc:
+                    print(f"[preflight] Warning: probe version cleanup failed: {_format_exception_context(cleanup_exc)}")
+            if callable(delete_agent):
+                try:
+                    delete_agent(agent_name=probe_agent_name, force=True)
+                except Exception as cleanup_exc:
+                    print(f"[preflight] Warning: probe agent cleanup failed: {_format_exception_context(cleanup_exc)}")
 
 
 def _run_preflight_checks(
     *,
     settings: Any,
     client: Any,
+    agents_api: Any,
     create_or_update: Callable[..., Any] | None,
     create_agent: Callable[..., Any] | None,
     create_version: Callable[..., Any] | None,
+    delete_version: Callable[..., Any] | None,
+    delete_agent: Callable[..., Any] | None,
 ) -> tuple[bool, list[str]]:
     """Validate endpoint, model deployment, and agent API readiness before deploy."""
 
     errors: list[str] = []
 
-    if not settings.azure_ai_foundry_project_endpoint:
-        errors.append("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT is empty")
+    endpoint_ok, endpoint_message = _validate_project_endpoint_format(settings.azure_ai_foundry_project_endpoint)
+    if endpoint_ok:
+        print(f"[preflight] {endpoint_message}")
+    else:
+        errors.append(endpoint_message)
 
     if not settings.azure_ai_foundry_model_deployment_name:
         errors.append("AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME is empty")
@@ -264,17 +348,24 @@ def _run_preflight_checks(
     if probe_ok:
         print(f"[preflight] {probe_message}")
     else:
-        # Some azure-ai-projects SDK builds expose agent APIs but not inference APIs.
-        # Treat this as a warning so CI can still deploy agents automatically.
-        inference_surface_missing = (
-            "does not expose inference APIs" in probe_message
-            or "No supported chat-completions method found" in probe_message
-        )
-        if inference_surface_missing:
-            print(f"[preflight] Warning: {probe_message}")
-            print("[preflight] Continuing because agent provisioning APIs are available.")
-        else:
-            errors.append(probe_message)
+        errors.append(probe_message)
+
+    list_ok, list_message = _preflight_agents_list_probe(agents_api)
+    if list_ok:
+        print(f"[preflight] {list_message}")
+    else:
+        errors.append(list_message)
+
+    version_probe_ok, version_probe_message = _preflight_create_version_probe(
+        create_version=create_version,
+        delete_version=delete_version,
+        delete_agent=delete_agent,
+        model_name=settings.azure_ai_foundry_model_deployment_name,
+    )
+    if version_probe_ok:
+        print(f"[preflight] {version_probe_message}")
+    else:
+        errors.append(version_probe_message)
 
     return len(errors) == 0, errors
 
@@ -325,6 +416,8 @@ def main() -> int:
     create_or_update = getattr(agents_api, "create_or_update_agent", None)
     create_agent = getattr(agents_api, "create_agent", None)
     create_version = getattr(agents_api, "create_version", None)
+    delete_version = getattr(agents_api, "delete_version", None)
+    delete_agent = getattr(agents_api, "delete", None)
 
     if callable(create_or_update):
         method_attempts.append(("create_or_update_agent", create_or_update))
@@ -336,9 +429,12 @@ def main() -> int:
     preflight_ok, preflight_errors = _run_preflight_checks(
         settings=settings,
         client=client,
+        agents_api=agents_api,
         create_or_update=create_or_update,
         create_agent=create_agent,
         create_version=create_version,
+        delete_version=delete_version,
+        delete_agent=delete_agent,
     )
     if not preflight_ok:
         print("[preflight] Validation failed:")
@@ -377,8 +473,6 @@ def main() -> int:
                 method,
                 settings.azure_ai_foundry_model_deployment_name,
                 definitions,
-                create_or_update,
-                create_agent,
             )
 
         if success_count > 0:
