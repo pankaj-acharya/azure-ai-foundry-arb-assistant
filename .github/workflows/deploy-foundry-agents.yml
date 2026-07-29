@@ -1,6 +1,28 @@
 name: Deploy Foundry Agents
 
 on:
+  workflow_call:
+    inputs:
+      enable_persistent_agent_deploy:
+        required: false
+        type: boolean
+        default: true
+      run_single_agent_smoke:
+        required: false
+        type: boolean
+        default: true
+      run_multi_agent_smoke:
+        required: false
+        type: boolean
+        default: false
+      blog_url:
+        required: false
+        type: string
+        default: ""
+      max_input_chars:
+        required: false
+        type: string
+        default: "12000"
   workflow_dispatch:
   push:
     branches:
@@ -19,16 +41,42 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
       AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
-      ENABLE_PERSISTENT_AGENT_DEPLOY: ${{ vars.ENABLE_PERSISTENT_AGENT_DEPLOY }}
+      ENABLE_PERSISTENT_AGENT_DEPLOY: ${{ github.event_name == 'workflow_call' && (inputs.enable_persistent_agent_deploy && 'true' || 'false') || vars.ENABLE_PERSISTENT_AGENT_DEPLOY }}
+      RUN_SINGLE_AGENT_SMOKE: ${{ github.event_name == 'workflow_call' && (inputs.run_single_agent_smoke && 'true' || 'false') || 'true' }}
+      RUN_MULTI_AGENT_SMOKE: ${{ github.event_name == 'workflow_call' && (inputs.run_multi_agent_smoke && 'true' || 'false') || 'false' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Validate required CI inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${AZURE_CLIENT_ID:-}" ]] || missing+=("AZURE_CLIENT_ID secret")
+          [[ -n "${AZURE_TENANT_ID:-}" ]] || missing+=("AZURE_TENANT_ID secret")
+          [[ -n "${AZURE_SUBSCRIPTION_ID:-}" ]] || missing+=("AZURE_SUBSCRIPTION_ID secret")
+          [[ -n "${AZURE_AI_FOUNDRY_PROJECT_ENDPOINT:-}" ]] || missing+=("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT secret")
+          [[ -n "${AZURE_AI_FOUNDRY_PROJECT_NAME:-}" ]] || missing+=("AZURE_AI_FOUNDRY_PROJECT_NAME secret")
+
+          BLOG_URL_VALUE="${{ github.event_name == 'workflow_call' && inputs.blog_url || vars.BLOG_URL }}"
+          [[ -n "${BLOG_URL_VALUE:-}" ]] || missing+=("BLOG_URL variable or workflow input")
+          MODEL_NAME_VALUE="${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}"
+          [[ -n "${MODEL_NAME_VALUE:-}" ]] || missing+=("AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME variable")
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "[validate] Missing required settings:"
+            for item in "${missing[@]}"; do
+              echo " - ${item}"
+            done
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |
@@ -41,8 +89,8 @@ jobs:
           cat > .env << 'EOF'
           AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
           AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
-          BLOG_URL=${{ vars.BLOG_URL }}
-          MAX_INPUT_CHARS=${{ vars.MAX_INPUT_CHARS }}
+          BLOG_URL=${{ github.event_name == 'workflow_call' && inputs.blog_url || vars.BLOG_URL }}
+          MAX_INPUT_CHARS=${{ github.event_name == 'workflow_call' && inputs.max_input_chars || vars.MAX_INPUT_CHARS }}
           OUTPUT_FOLDER=outputs
           LOG_LEVEL=INFO
           EOF
@@ -75,9 +123,9 @@ jobs:
         run: python scripts/deploy_foundry_agents.py --strict
 
       - name: Run one-agent smoke deployment check
+        if: ${{ env.RUN_SINGLE_AGENT_SMOKE == 'true' || env.RUN_SINGLE_AGENT_SMOKE == 'TRUE' || env.RUN_SINGLE_AGENT_SMOKE == 'True' }}
         run: python scripts/smoke_test_single_agent.py
 
-      # Optional multi-agent smoke can be re-enabled after persistent provisioning is stable.
-      # - name: Run smoke test
-      #   run: python scripts/smoke_test.py
-      #   continue-on-error: true
+      - name: Run multi-agent smoke deployment check
+        if: ${{ env.RUN_MULTI_AGENT_SMOKE == 'true' || env.RUN_MULTI_AGENT_SMOKE == 'TRUE' || env.RUN_MULTI_AGENT_SMOKE == 'True' }}
+        run: python scripts/smoke_test.py

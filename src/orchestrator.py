@@ -10,6 +10,7 @@ from .agent_prompts import (
     COST_AGENT_PROMPT,
     RESILIENCY_AGENT_PROMPT,
     SECURITY_AGENT_PROMPT,
+    build_chairperson_user_prompt,
     build_specialist_user_prompt,
 )
 from .web_loader import WebPageContent
@@ -48,15 +49,10 @@ class ARBOrchestrator:
             }
             specialist_outputs = {name: future.result() for name, future in futures.items()}
 
-        chairperson_user_prompt = (
-            "Consolidate the specialist reviews below into the requested ARB final report format.\n\n"
-            f"Page title: {page.title}\n"
-            f"Page URL: {page.url}\n\n"
-            "Specialist reviews:\n"
-            f"Architecture:\n{specialist_outputs['architecture']}\n\n"
-            f"Security:\n{specialist_outputs['security']}\n\n"
-            f"Cost:\n{specialist_outputs['cost']}\n\n"
-            f"Resiliency:\n{specialist_outputs['resiliency']}\n"
+        chairperson_user_prompt = build_chairperson_user_prompt(
+            page_title=page.title,
+            page_url=page.url,
+            specialist_outputs=specialist_outputs,
         )
 
         final_markdown = self.model_client.invoke_model(ARB_CHAIRPERSON_PROMPT, chairperson_user_prompt)

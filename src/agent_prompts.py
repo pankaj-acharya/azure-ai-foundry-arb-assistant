@@ -84,6 +84,24 @@ Consolidate into a final markdown report with these sections:
 Keep the response practical, beginner-friendly, and action-oriented.
 """.strip()
 
+ARCHITECTURE_AGENT_NAME = "architecture-agent"
+SECURITY_AGENT_NAME = "security-agent"
+COST_AGENT_NAME = "cost-agent"
+RESILIENCY_AGENT_NAME = "resiliency-agent"
+ARB_CHAIRPERSON_AGENT_NAME = "arb-chairperson-agent"
+
+SPECIALIST_AGENT_PROMPTS: dict[str, str] = {
+    ARCHITECTURE_AGENT_NAME: ARCHITECTURE_AGENT_PROMPT,
+    SECURITY_AGENT_NAME: SECURITY_AGENT_PROMPT,
+    COST_AGENT_NAME: COST_AGENT_PROMPT,
+    RESILIENCY_AGENT_NAME: RESILIENCY_AGENT_PROMPT,
+}
+
+ALL_PERSISTENT_AGENT_PROMPTS: dict[str, str] = {
+    **SPECIALIST_AGENT_PROMPTS,
+    ARB_CHAIRPERSON_AGENT_NAME: ARB_CHAIRPERSON_PROMPT,
+}
+
 
 def build_specialist_user_prompt(page_title: str, page_url: str, page_text: str) -> str:
     """Build a common user payload used by all specialist agents."""
@@ -94,4 +112,19 @@ def build_specialist_user_prompt(page_title: str, page_url: str, page_text: str)
         f"URL: {page_url}\n\n"
         "Extracted Content:\n"
         f"{page_text}"
+    )
+
+
+def build_chairperson_user_prompt(page_title: str, page_url: str, specialist_outputs: dict[str, str]) -> str:
+    """Build the chairperson consolidation prompt from specialist outputs."""
+
+    return (
+        "Consolidate the specialist reviews below into the requested ARB final report format.\n\n"
+        f"Page title: {page_title}\n"
+        f"Page URL: {page_url}\n\n"
+        "Specialist reviews:\n"
+        f"Architecture:\n{specialist_outputs['architecture']}\n\n"
+        f"Security:\n{specialist_outputs['security']}\n\n"
+        f"Cost:\n{specialist_outputs['cost']}\n\n"
+        f"Resiliency:\n{specialist_outputs['resiliency']}\n"
     )

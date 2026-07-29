@@ -22,17 +22,26 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.agent_prompts import (  # noqa: E402
-    ARCHITECTURE_AGENT_PROMPT,
-    COST_AGENT_PROMPT,
-    RESILIENCY_AGENT_PROMPT,
-    SECURITY_AGENT_PROMPT,
+    ALL_PERSISTENT_AGENT_PROMPTS,
 )
 from src.config import load_settings  # noqa: E402
 
 try:
-    from azure.ai.projects.models import PromptAgentDefinition
+    from azure.ai.projects.models import (
+        AgentEndpointConfig,
+        FixedRatioVersionSelectionRule,
+        PromptAgentDefinition,
+        ProtocolConfiguration,
+        ResponsesProtocolConfiguration,
+        VersionSelector,
+    )
 except ImportError:
+    AgentEndpointConfig = None
+    FixedRatioVersionSelectionRule = None
     PromptAgentDefinition = None
+    ProtocolConfiguration = None
+    ResponsesProtocolConfiguration = None
+    VersionSelector = None
 
 
 def _is_not_found_error(exc: Exception) -> bool:
@@ -206,20 +215,67 @@ def _build_version_definition(model_name: str, instructions: str) -> Any:
     }
 
 
+def _configure_agent_endpoint_to_latest_version(
+    *,
+    update_details: Callable[..., Any] | None,
+    agent_name: str,
+    agent_version: str,
+) -> tuple[bool, str]:
+    """Bind an agent endpoint to the newly created version using responses protocol."""
+
+    required_models_available = all(
+        value is not None
+        for value in (
+            AgentEndpointConfig,
+            FixedRatioVersionSelectionRule,
+            ProtocolConfiguration,
+            ResponsesProtocolConfiguration,
+            VersionSelector,
+        )
+    )
+    if not callable(update_details) or not required_models_available:
+        return False, "update_details or endpoint configuration models are unavailable in current SDK"
+
+    endpoint_config = AgentEndpointConfig(
+        version_selector=VersionSelector(
+            version_selection_rules=[
+                FixedRatioVersionSelectionRule(agent_version=agent_version, traffic_percentage=100),
+            ]
+        ),
+        protocol_configuration=ProtocolConfiguration(responses=ResponsesProtocolConfiguration()),
+    )
+    update_details(agent_name=agent_name, agent_endpoint=endpoint_config)
+    return True, "Endpoint configured to latest version"
+
+
 def _deploy_with_create_version(
     create_version: Callable[..., Any],
     model_name: str,
     definitions: dict[str, str],
+    update_details: Callable[..., Any] | None,
 ) -> tuple[int, list[str]]:
     errors: list[str] = []
     success_count = 0
     for name, instructions in definitions.items():
         try:
             definition = _build_version_definition(model_name, instructions)
-            create_version(
+            created = create_version(
                 agent_name=name,
                 definition=definition,
             )
+            created_version = getattr(created, "version", None)
+            if isinstance(created_version, str):
+                endpoint_ok, endpoint_message = _configure_agent_endpoint_to_latest_version(
+                    update_details=update_details,
+                    agent_name=name,
+                    agent_version=created_version,
+                )
+                if endpoint_ok:
+                    print(f"[deploy] Endpoint configured with update_details: {name} -> v{created_version}")
+                else:
+                    print(f"[deploy] Warning: endpoint configuration skipped for '{name}': {endpoint_message}")
+            else:
+                print(f"[deploy] Warning: create_version response did not include version for '{name}'")
             print(f"[deploy] Created agent version with create_version: {name}")
             success_count += 1
         except Exception as exc:
@@ -405,17 +461,13 @@ def main() -> int:
         print("[deploy] Fallback: Keep prompts in src/agent_prompts.py and use local orchestration mode.")
         return 1 if args.strict else 0
 
-    definitions = {
-        "architecture-agent": ARCHITECTURE_AGENT_PROMPT,
-        "security-agent": SECURITY_AGENT_PROMPT,
-        "cost-agent": COST_AGENT_PROMPT,
-        "resiliency-agent": RESILIENCY_AGENT_PROMPT,
-    }
+    definitions = dict(ALL_PERSISTENT_AGENT_PROMPTS)
 
     method_attempts: list[tuple[str, Callable[..., Any]]] = []
     create_or_update = getattr(agents_api, "create_or_update_agent", None)
     create_agent = getattr(agents_api, "create_agent", None)
     create_version = getattr(agents_api, "create_version", None)
+    update_details = getattr(agents_api, "update_details", None)
     delete_version = getattr(agents_api, "delete_version", None)
     delete_agent = getattr(agents_api, "delete", None)
 
@@ -473,6 +525,7 @@ def main() -> int:
                 method,
                 settings.azure_ai_foundry_model_deployment_name,
                 definitions,
+                update_details,
             )
 
         if success_count > 0:
