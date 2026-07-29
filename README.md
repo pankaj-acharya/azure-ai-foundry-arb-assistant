@@ -143,33 +143,63 @@ gh repo create architecture-review-board-assistant --private --source=. --remote
 
 ## GitHub Actions setup (OIDC only)
 
-Workflow file: `.github/workflows/deploy-foundry-agents.yml`
+### Workflows
 
-It uses:
-- `permissions: id-token: write, contents: read`
-- OIDC login (`azure/login`)
-- unit tests
-- one-agent Foundry smoke invocation (blocking)
+1. `.github/workflows/deploy-foundry-agents.yml`
+   - CI-friendly reusable deployment workflow
+   - supports `push`, `workflow_dispatch`, and `workflow_call`
+   - validates config, runs tests, optional persistent agent deployment, and smoke checks
+2. `.github/workflows/orchestrate-arb-review.yml`
+   - wrapper workflow for end-to-end execution
+   - deploys/updates persistent agents, then invokes all specialist agents plus chairperson and uploads `outputs/arb-review.md` as artifact
 
-Required repository variables:
+### Required repository **secrets**
+
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`
-- `AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME`
-- `BLOG_URL`
-
-Optional but supported variables:
-- `AZURE_RESOURCE_GROUP`
 - `AZURE_AI_FOUNDRY_PROJECT_NAME`
-- `MAX_INPUT_CHARS`
 
-Feature flag variable:
+### Required repository **variables**
+
+- `AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME`
+- `BLOG_URL` (used by default deploy workflow runs)
+
+### Optional variables
+
+- `AZURE_RESOURCE_GROUP`
+- `MAX_INPUT_CHARS`
 - `ENABLE_PERSISTENT_AGENT_DEPLOY`
-  - Set to `true` to run persistent agent provisioning steps in CI.
-  - Set to `false` (or leave unset) to skip persistent provisioning and run only the one-agent smoke deployment check.
 
 You must configure federated credentials in Microsoft Entra ID for your GitHub repo/branch/environment.
+
+## Logical deployment + orchestration diagram
+
+```mermaid
+flowchart LR
+    A[GitHub Actions Trigger] --> B[deploy-foundry-agents.yml]
+    B --> B1[Validate required secrets/vars]
+    B1 --> B2[Run unit tests]
+    B2 --> B3[Azure Login OIDC]
+    B3 --> B4[Preflight checks]
+    B4 --> B5[Deploy/Update persistent agents]
+    B5 --> B6[Single-agent smoke test]
+
+    C[workflow_dispatch: orchestrate-arb-review.yml] --> D[Call deploy-foundry-agents reusable workflow]
+    D --> E[Run scripts/orchestrate_persistent_agents.py]
+    E --> E1[Invoke Architecture agent]
+    E --> E2[Invoke Security agent]
+    E --> E3[Invoke Cost agent]
+    E --> E4[Invoke Resiliency agent]
+    E1 --> F[Compose chairperson input]
+    E2 --> F
+    E3 --> F
+    E4 --> F
+    F --> G[Invoke ARB chairperson agent]
+    G --> H[Write outputs/arb-review.md]
+    H --> I[Upload artifact]
+```
 
 ## Cost control notes
 
@@ -188,21 +218,24 @@ You must configure federated credentials in Microsoft Entra ID for your GitHub r
 - Use managed identity/OIDC in CI/CD (no client secrets)
 - Do not scrape private/authenticated content
 
-## CI deployment mode (current)
+## CI deployment mode
 
-The GitHub Actions workflow currently uses a simplified one-agent deployment validation path:
+`deploy-foundry-agents.yml` now supports:
+- from-scratch project validation
+- persistent agent deployment/update
+- one-agent and optional multi-agent smoke checks
+- reusable invocation from other workflows
 
-- Runs unit tests
-- Authenticates with Azure via OIDC
-- Executes `python scripts/smoke_test_single_agent.py`
-
-This provides reliable automated validation of endpoint + model invocation without depending on SDK-specific persistent agent provisioning APIs.
-
-Persistent Foundry agent provisioning is now controlled by `ENABLE_PERSISTENT_AGENT_DEPLOY`:
+Persistent Foundry agent provisioning is controlled by `ENABLE_PERSISTENT_AGENT_DEPLOY`:
 - `true`: run preflight + persistent provisioning (`deploy_foundry_agents.py`)
-- `false` or unset: skip persistent provisioning and keep one-agent smoke validation only
+- `false` or unset: skip persistent provisioning and run smoke-only checks
 
-## Deploying Foundry agents
+To run full persistent orchestration on demand:
+- Trigger `orchestrate-arb-review.yml`
+- Provide `blog_url` and optional `max_input_chars`
+- Download `arb-review-report` artifact after completion
+
+## Deploying Foundry agents (from scratch)
 
 Run:
 
@@ -216,6 +249,14 @@ Prerequisites for persistent agent deployment:
 
 The script attempts to create/update persistent agents if your installed `azure-ai-projects` SDK supports that API shape.
 If not supported, it exits gracefully and tells you to use local orchestration prompts from `src/agent_prompts.py`.
+
+New persistent orchestration script:
+
+```bash
+python scripts/orchestrate_persistent_agents.py
+```
+
+It invokes deployed specialist agents in parallel, then calls the chairperson agent for final consolidation and writes `outputs/arb-review.md`.
 
 ## Cleanup reminder
 

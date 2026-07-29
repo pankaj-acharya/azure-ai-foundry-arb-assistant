@@ -1,0 +1,81 @@
+name: Orchestrate ARB Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      blog_url:
+        description: "Public page URL to review"
+        required: true
+        type: string
+      max_input_chars:
+        description: "Maximum source characters to include in prompts"
+        required: false
+        default: "12000"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-agents:
+    uses: ./.github/workflows/deploy-foundry-agents.yml
+    with:
+      enable_persistent_agent_deploy: true
+      run_single_agent_smoke: true
+      run_multi_agent_smoke: false
+      blog_url: ${{ inputs.blog_url }}
+      max_input_chars: ${{ inputs.max_input_chars }}
+    secrets: inherit
+
+  run-persistent-orchestration:
+    runs-on: ubuntu-latest
+    needs: deploy-agents
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+      AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create runtime .env
+        shell: bash
+        run: |
+          cat > .env << 'EOF'
+          AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
+          BLOG_URL=${{ inputs.blog_url }}
+          MAX_INPUT_CHARS=${{ inputs.max_input_chars }}
+          OUTPUT_FOLDER=outputs
+          LOG_LEVEL=INFO
+          EOF
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run persistent multi-agent orchestration
+        run: python scripts/orchestrate_persistent_agents.py
+
+      - name: Upload ARB report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arb-review-report
+          path: outputs/arb-review.md
