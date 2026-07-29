@@ -426,6 +426,104 @@ def _run_preflight_checks(
     return len(errors) == 0, errors
 
 
+def _disable_all_agents(
+    *,
+    agents_api: Any,
+    agent_names: list[str],
+) -> tuple[int, list[str]]:
+    """Attempt to disable each named agent via available SDK methods."""
+
+    disabled_count = 0
+    errors: list[str] = []
+
+    disable_fn = getattr(agents_api, "disable", None)
+    update_fn = getattr(agents_api, "update", None)
+
+    for name in agent_names:
+        done = False
+
+        if callable(disable_fn):
+            try:
+                disable_fn(agent_name=name)
+                print(f"[manage] Disabled agent: {name}")
+                disabled_count += 1
+                done = True
+            except Exception as exc:
+                if _is_not_found_error(exc):
+                    print(f"[manage] Agent '{name}' not found — already deleted or never created")
+                    done = True
+                elif not done:
+                    print(f"[manage] disable() failed for '{name}': {_format_exception_context(exc)}")
+
+        if not done and callable(update_fn):
+            try:
+                update_fn(agent_name=name, enabled=False)
+                print(f"[manage] Disabled agent via update: {name}")
+                disabled_count += 1
+                done = True
+            except Exception as exc:
+                if not _is_not_found_error(exc):
+                    print(f"[manage] update(enabled=False) failed for '{name}': {_format_exception_context(exc)}")
+
+        if not done:
+            msg = (
+                f"SDK disable not available for '{name}'. "
+                "Go to Azure AI Foundry portal → your project → Agents → select agent → toggle Enabled off."
+            )
+            print(f"[manage] {msg}")
+            errors.append(msg)
+
+    return disabled_count, errors
+
+
+def _delete_all_agents(
+    *,
+    agents_api: Any,
+    agent_names: list[str],
+    delete_agent_fn: Callable[..., Any] | None,
+    delete_version_fn: Callable[..., Any] | None,
+) -> tuple[int, list[str]]:
+    """Delete each named agent and its versions where SDK support exists."""
+
+    if not callable(delete_agent_fn):
+        msg = "delete API not available in current SDK surface — cannot delete agents programmatically"
+        print(f"[manage] {msg}")
+        return 0, [msg]
+
+    deleted_count = 0
+    errors: list[str] = []
+    list_versions_fn = getattr(agents_api, "list_versions", None)
+
+    for name in agent_names:
+        # Best-effort: delete known versions first to avoid orphan version conflicts
+        if callable(delete_version_fn) and callable(list_versions_fn):
+            try:
+                for version_obj in list_versions_fn(agent_name=name):
+                    ver = getattr(version_obj, "version", None)
+                    if isinstance(ver, str):
+                        try:
+                            delete_version_fn(agent_name=name, agent_version=ver, force=True)
+                            print(f"[manage] Deleted version '{ver}' of agent '{name}'")
+                        except Exception as exc:
+                            print(f"[manage] Warning: could not delete version '{ver}' of '{name}': {exc}")
+            except Exception as exc:
+                print(f"[manage] Warning: could not list versions for '{name}': {exc}")
+
+        try:
+            delete_agent_fn(agent_name=name, force=True)
+            print(f"[manage] Deleted agent: {name}")
+            deleted_count += 1
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                print(f"[manage] Agent '{name}' not found — already deleted or never created")
+            else:
+                msg = f"Failed to delete '{name}': {_format_exception_context(exc)}"
+                print(f"[manage] {msg}")
+                errors.append(msg)
+
+    return deleted_count, errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deploy or validate Foundry prompt agents")
     parser.add_argument(
@@ -437,6 +535,12 @@ def main() -> int:
         "--strict",
         action="store_true",
         help="Fail (non-zero exit) when automated provisioning cannot complete.",
+    )
+    parser.add_argument(
+        "--action",
+        choices=["deploy", "disable", "delete"],
+        default="deploy",
+        help="Action to perform: deploy (default), disable, or delete all agents.",
     )
     args = parser.parse_args()
 
@@ -462,14 +566,42 @@ def main() -> int:
         return 1 if args.strict else 0
 
     definitions = dict(ALL_PERSISTENT_AGENT_PROMPTS)
+    agent_names = list(definitions.keys())
 
+    delete_version = getattr(agents_api, "delete_version", None)
+    delete_agent = getattr(agents_api, "delete", None)
+
+    # ── Disable / Delete short-circuit paths ──────────────────────────────────
+    if args.action == "disable":
+        print(f"[manage] Disabling {len(agent_names)} agent(s): {', '.join(agent_names)}")
+        disabled_count, errors = _disable_all_agents(
+            agents_api=agents_api,
+            agent_names=agent_names,
+        )
+        print(f"[manage] Disable complete: {disabled_count} agent(s) processed.")
+        if errors and args.strict:
+            return 1
+        return 0
+
+    if args.action == "delete":
+        print(f"[manage] Deleting {len(agent_names)} agent(s): {', '.join(agent_names)}")
+        deleted_count, errors = _delete_all_agents(
+            agents_api=agents_api,
+            agent_names=agent_names,
+            delete_agent_fn=delete_agent,
+            delete_version_fn=delete_version,
+        )
+        print(f"[manage] Delete complete: {deleted_count} agent(s) removed.")
+        if errors and args.strict:
+            return 1
+        return 0
+
+    # ── Deploy path (default) ─────────────────────────────────────────────────
     method_attempts: list[tuple[str, Callable[..., Any]]] = []
     create_or_update = getattr(agents_api, "create_or_update_agent", None)
     create_agent = getattr(agents_api, "create_agent", None)
     create_version = getattr(agents_api, "create_version", None)
     update_details = getattr(agents_api, "update_details", None)
-    delete_version = getattr(agents_api, "delete_version", None)
-    delete_agent = getattr(agents_api, "delete", None)
 
     if callable(create_or_update):
         method_attempts.append(("create_or_update_agent", create_or_update))

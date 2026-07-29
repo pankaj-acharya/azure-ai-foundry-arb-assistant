@@ -12,6 +12,28 @@ on:
         required: false
         default: "12000"
         type: string
+      model_deployment_name:
+        description: "Model deployment to use for agents"
+        required: false
+        default: "gpt-4.1"
+        type: choice
+        options:
+          - gpt-4.1
+          - gpt-4.1-mini
+          - gpt-5.4
+          - gpt-5.4-mini
+          - claude-opus-4.5
+          - claude-opus-5
+          - claude-sonnet-4.5
+      agent_action:
+        description: "Action to perform on agents before orchestration"
+        required: false
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - disable
+          - delete
 
 permissions:
   id-token: write
@@ -22,15 +44,18 @@ jobs:
     uses: ./.github/workflows/deploy-foundry-agents.yml
     with:
       enable_persistent_agent_deploy: true
-      run_single_agent_smoke: true
+      run_single_agent_smoke: ${{ inputs.agent_action == 'deploy' }}
       run_multi_agent_smoke: false
       blog_url: ${{ inputs.blog_url }}
       max_input_chars: ${{ inputs.max_input_chars }}
+      model_deployment_name: ${{ inputs.model_deployment_name }}
+      agent_action: ${{ inputs.agent_action }}
     secrets: inherit
 
   run-persistent-orchestration:
     runs-on: ubuntu-latest
     needs: deploy-agents
+    if: ${{ inputs.agent_action == 'deploy' || inputs.agent_action == '' }}
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

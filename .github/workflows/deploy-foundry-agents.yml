@@ -23,7 +23,40 @@ on:
         required: false
         type: string
         default: "12000"
+      model_deployment_name:
+        description: "Override model deployment name (leave blank to use repo variable)"
+        required: false
+        type: string
+        default: ""
+      agent_action:
+        description: "Action to perform: deploy | disable | delete"
+        required: false
+        type: string
+        default: "deploy"
   workflow_dispatch:
+    inputs:
+      model_deployment_name:
+        description: "Model deployment to use for agents"
+        required: false
+        default: "gpt-4.1"
+        type: choice
+        options:
+          - gpt-4.1
+          - gpt-4.1-mini
+          - gpt-5.4
+          - gpt-5.4-mini
+          - claude-opus-4.5
+          - claude-opus-5
+          - claude-sonnet-4.5
+      agent_action:
+        description: "Action to perform on agents"
+        required: false
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - disable
+          - delete
   push:
     branches:
       - main
@@ -44,6 +77,8 @@ jobs:
       ENABLE_PERSISTENT_AGENT_DEPLOY: ${{ github.event_name == 'workflow_call' && (inputs.enable_persistent_agent_deploy && 'true' || 'false') || vars.ENABLE_PERSISTENT_AGENT_DEPLOY }}
       RUN_SINGLE_AGENT_SMOKE: ${{ github.event_name == 'workflow_call' && (inputs.run_single_agent_smoke && 'true' || 'false') || 'true' }}
       RUN_MULTI_AGENT_SMOKE: ${{ github.event_name == 'workflow_call' && (inputs.run_multi_agent_smoke && 'true' || 'false') || 'false' }}
+      AGENT_ACTION: ${{ inputs.agent_action || 'deploy' }}
+      MODEL_DEPLOYMENT_OVERRIDE: ${{ inputs.model_deployment_name || '' }}
 
     steps:
       - name: Checkout
@@ -86,9 +121,14 @@ jobs:
       - name: Create runtime .env
         shell: bash
         run: |
-          cat > .env << 'EOF'
+          # Use dropdown model override if provided, else fall back to repo variable
+          MODEL_NAME="${MODEL_DEPLOYMENT_OVERRIDE:-}"
+          if [[ -z "$MODEL_NAME" ]]; then
+            MODEL_NAME="${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}"
+          fi
+          cat > .env << EOF
           AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
-          AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}
+          AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${MODEL_NAME}
           BLOG_URL=${{ github.event_name == 'workflow_call' && inputs.blog_url || vars.BLOG_URL }}
           MAX_INPUT_CHARS=${{ github.event_name == 'workflow_call' && inputs.max_input_chars || vars.MAX_INPUT_CHARS }}
           OUTPUT_FOLDER=outputs
@@ -120,7 +160,7 @@ jobs:
 
       - name: Deploy/Update Foundry agents
         if: ${{ env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'true' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'TRUE' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'True' }}
-        run: python scripts/deploy_foundry_agents.py --strict
+        run: python scripts/deploy_foundry_agents.py --strict --action ${{ env.AGENT_ACTION }}
 
       - name: Run one-agent smoke deployment check
         if: ${{ env.RUN_SINGLE_AGENT_SMOKE == 'true' || env.RUN_SINGLE_AGENT_SMOKE == 'TRUE' || env.RUN_SINGLE_AGENT_SMOKE == 'True' }}
