@@ -19,6 +19,12 @@ class _FakeConversationClient:
 class _FakeResponsesClientReasoningRejected:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.retrieve_calls: list[str] = []
+        self._responses_by_id = {
+            "resp-123": [
+                SimpleNamespace(id="resp-123", status="completed", output_text="agent response"),
+            ]
+        }
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -27,7 +33,12 @@ class _FakeResponsesClientReasoningRejected:
                 "Error code: 400 - {'error': {'code': 'invalid_payload', "
                 "'message': 'Not allowed when agent is specified.', 'param': 'reasoning'}}"
             )
-        return SimpleNamespace(output_text="agent response")
+        return SimpleNamespace(id="resp-123", status="in_progress", output_text="")
+
+    def retrieve(self, response_id: str):
+        self.retrieve_calls.append(response_id)
+        queue = self._responses_by_id[response_id]
+        return queue.pop(0)
 
 
 class _FakeOpenAIClient:
@@ -63,5 +74,5 @@ def test_invoke_persistent_agent_retries_without_reasoning_for_agent_calls() -> 
     assert len(project_client.openai.responses.calls) == 2
     assert "reasoning" in project_client.openai.responses.calls[0]
     assert "reasoning" not in project_client.openai.responses.calls[1]
+    assert project_client.openai.responses.retrieve_calls == ["resp-123"]
     assert project_client.openai.conversations.deleted_ids == ["conv-123"]
-

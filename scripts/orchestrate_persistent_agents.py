@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,10 @@ def _invoke_persistent_agent(
                     raise
                 payload.pop("reasoning", None)
                 response = openai_client.responses.create(**payload)
+            response = _wait_for_response_completion(
+                responses_client=openai_client.responses,
+                response=response,
+            )
             return _extract_response_text(response)
         finally:
             try:
@@ -91,6 +96,26 @@ def _is_unsupported_reasoning_for_agent_error(exc: Exception) -> bool:
     if "'reasoning'" not in message:
         return False
     return ("unsupported parameter" in message) or ("not allowed when agent is specified" in message)
+
+
+def _wait_for_response_completion(*, responses_client: Any, response: Any, timeout_seconds: int = 120) -> Any:
+    status = str(getattr(response, "status", "")).lower()
+    if status in {"", "completed"}:
+        return response
+
+    response_id = getattr(response, "id", None)
+    retrieve = getattr(responses_client, "retrieve", None)
+    if not response_id or not callable(retrieve):
+        return response
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = retrieve(response_id)
+        status = str(getattr(response, "status", "")).lower()
+        if status in {"completed", "failed", "incomplete", "cancelled"}:
+            return response
+        time.sleep(2)
+    return response
 
 
 def main() -> int:
