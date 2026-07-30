@@ -110,11 +110,17 @@ def _get_available_model_version(
         return None
     try:
         models = json.loads(result.stdout)
+        print(f"[deploy-model] Available models in catalog ({len(models)}):")
+        for m in models:
+            mfmt = m.get("format") or m.get("modelFormat") or "?"
+            mname = m.get("name") or m.get("modelName") or "?"
+            mver = m.get("version") or m.get("modelVersion") or "?"
+            print(f"  catalog: {mfmt}/{mname}  version={mver}")
+
         for m in models:
             fmt = (m.get("format") or m.get("modelFormat") or "").lower()
             name = (m.get("name") or m.get("modelName") or "").lower()
             if fmt == model_format.lower() and name == model_name.lower():
-                # Try common version fields
                 version = (
                     m.get("version") or m.get("modelVersion") or
                     (m.get("deprecation") or {}).get("fineTune") or ""
@@ -123,9 +129,9 @@ def _get_available_model_version(
                     versions = m.get("versions") or m.get("modelVersions") or []
                     version = str(versions[-1]) if versions else ""
                 if version:
-                    print(f"[deploy-model] Found model version: {version}")
+                    print(f"[deploy-model] Found version: {version}")
                     return str(version)
-        print(f"[deploy-model] Warning: model {model_format}/{model_name} not found in list-models output")
+        print(f"[deploy-model] Warning: {model_format}/{model_name} not found in catalog")
         return None
     except (json.JSONDecodeError, AttributeError, IndexError):
         return None
@@ -230,10 +236,14 @@ def main() -> int:
         )
         if not model_version:
             print(
-                f"[deploy-model] Could not determine model version for "
-                f"{model_info['format']}/{model_info['name']}.\n"
-                f"[deploy-model] The model may not be available in account '{account_name}'.\n"
-                f"[deploy-model] Check Azure AI Foundry portal → Model Catalog for available models."
+                f"[deploy-model] ERROR: {model_info['format']}/{model_info['name']} is not available "
+                f"in account '{account_name}'.\n"
+                f"[deploy-model] Possible reasons:\n"
+                f"[deploy-model]   1. Anthropic models require marketplace acceptance — go to Azure AI Foundry\n"
+                f"[deploy-model]      portal → Model Catalog → Search '{model_info['name']}' → Subscribe\n"
+                f"[deploy-model]   2. The model may not be available in your Azure region (East US)\n"
+                f"[deploy-model]   3. Your subscription may need Anthropic model access enabled by your admin\n"
+                f"[deploy-model] Tip: Run this workflow with a GPT model (e.g., gpt-4.1-mini) to verify the pipeline works."
             )
             return 1
         print(f"[deploy-model] Creating deployment '{deployment_name}' (version: {model_version})...")
