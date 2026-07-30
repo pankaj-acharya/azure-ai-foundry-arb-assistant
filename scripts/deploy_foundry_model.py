@@ -101,8 +101,8 @@ def _list_and_check_existing(
 
 def _get_available_model_version(
     resource_group: str, account_name: str, model_format: str, model_name: str
-) -> str | None:
-    """Query the account's available models and return the latest non-deprecated version."""
+) -> tuple[str, str] | None:
+    """Return (version, sku_name) for the latest non-deprecated version, or None."""
     result = subprocess.run(
         ["az", "cognitiveservices", "account", "list-models",
          "--resource-group", resource_group, "--name", account_name, "--output", "json"],
@@ -119,11 +119,11 @@ def _get_available_model_version(
             mname = m.get("name") or m.get("modelName") or "?"
             mver = m.get("version") or m.get("modelVersion") or "?"
             mlc = m.get("lifecycleStatus") or m.get("status") or "?"
-            print(f"  catalog: {mfmt}/{mname}  version={mver}  lifecycle={mlc}")
+            skus = [s.get("name", "?") for s in (m.get("skus") or [])]
+            print(f"  catalog: {mfmt}/{mname}  version={mver}  lifecycle={mlc}  skus={skus}")
 
-        # Collect all matching (version, lifecycleStatus) pairs
         DEPRECATED_STATES = {"deprecated", "deprecating", "retiring", "retired"}
-        candidates: list[tuple[str, str]] = []
+        candidates: list[tuple[str, str, str]] = []  # (version, lifecycle, sku)
         for m in models:
             fmt = (m.get("format") or m.get("modelFormat") or "").lower()
             name = (m.get("name") or m.get("modelName") or "").lower()
@@ -137,29 +137,29 @@ def _get_available_model_version(
                 versions = m.get("versions") or m.get("modelVersions") or []
                 version = str(versions[-1]) if versions else ""
             lc = (m.get("lifecycleStatus") or m.get("status") or "").lower()
+            # Extract first supported SKU; default to GlobalStandard for newer models
+            sku_list = m.get("skus") or []
+            sku_name = sku_list[0].get("name", "GlobalStandard") if sku_list else "GlobalStandard"
             if version:
-                candidates.append((version, lc))
+                candidates.append((version, lc, sku_name))
 
         if not candidates:
             print(f"[deploy-model] Warning: {model_format}/{model_name} not found in catalog")
             return None
 
-        # Prefer non-deprecated; fail cleanly if all are deprecated
-        active = [(v, lc) for v, lc in candidates if lc not in DEPRECATED_STATES]
+        active = [(v, lc, s) for v, lc, s in candidates if lc not in DEPRECATED_STATES]
         if not active:
-            versions_str = ", ".join(v for v, _ in candidates)
+            versions_str = ", ".join(v for v, _, _ in candidates)
             print(
                 f"[deploy-model] ERROR: all versions of {model_format}/{model_name} are deprecated "
-                f"({versions_str}) and cannot be used for new deployments.\n"
-                f"[deploy-model] Please choose a model with GenerallyAvailable lifecycle status "
-                f"(e.g. gpt-5.4, gpt-5.4-mini, gpt-5)."
+                f"({versions_str}). Please choose a GenerallyAvailable model (e.g. gpt-5.4, gpt-5)."
             )
             return None
 
         pool = sorted(active, key=lambda x: x[0])
-        chosen_version, chosen_lc = pool[-1]
-        print(f"[deploy-model] Found version: {chosen_version}  lifecycle={chosen_lc}")
-        return chosen_version
+        chosen_version, chosen_lc, chosen_sku = pool[-1]
+        print(f"[deploy-model] Found version: {chosen_version}  lifecycle={chosen_lc}  sku={chosen_sku}")
+        return chosen_version, chosen_sku
 
     except (json.JSONDecodeError, AttributeError, IndexError) as exc:
         print(f"[deploy-model] Warning: failed to parse list-models output: {exc}")
@@ -170,6 +170,7 @@ def _create_via_cli(
     subscription_id: str, resource_group: str, account_name: str,
     deployment_name: str, model_info: dict[str, str],
     model_version: str,
+    sku_name: str = "GlobalStandard",
 ) -> bool:
     """Create deployment using `az cognitiveservices account deployment create`."""
     org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
@@ -185,7 +186,7 @@ def _create_via_cli(
         "--model-format", model_info["format"],
         "--model-name", model_info["name"],
         "--model-version", model_version,
-        "--sku-name", "Standard",
+        "--sku-name", sku_name,
         "--sku-capacity", "1",
     ]
 
@@ -260,10 +261,10 @@ def main() -> int:
 
     if state is None:
         # Discover the model version from the account's model catalog
-        model_version = _get_available_model_version(
+        version_info = _get_available_model_version(
             resource_group, account_name, model_info["format"], model_info["name"]
         )
-        if not model_version:
+        if not version_info:
             print(
                 f"[deploy-model] ERROR: {model_info['format']}/{model_info['name']} is not available "
                 f"in account '{account_name}'.\n"
@@ -272,12 +273,13 @@ def main() -> int:
                 f"[deploy-model]      portal → Model Catalog → Search '{model_info['name']}' → Subscribe\n"
                 f"[deploy-model]   2. The model may not be available in your Azure region (East US)\n"
                 f"[deploy-model]   3. Your subscription may need Anthropic model access enabled by your admin\n"
-                f"[deploy-model] Tip: Run this workflow with a GPT model (e.g., gpt-4.1-mini) to verify the pipeline works."
+                f"[deploy-model] Tip: Run this workflow with a GPT model (e.g., gpt-5.4, gpt-5) to verify the pipeline works."
             )
             return 1
-        print(f"[deploy-model] Creating deployment '{deployment_name}' (version: {model_version})...")
+        model_version, sku_name = version_info
+        print(f"[deploy-model] Creating deployment '{deployment_name}' (version: {model_version}, sku: {sku_name})...")
         if not _create_via_cli(
-            subscription_id, resource_group, account_name, deployment_name, model_info, model_version
+            subscription_id, resource_group, account_name, deployment_name, model_info, model_version, sku_name
         ):
             return 1
         print(f"[deploy-model] Create request submitted.")
