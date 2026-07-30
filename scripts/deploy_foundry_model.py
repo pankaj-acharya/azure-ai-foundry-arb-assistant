@@ -1,37 +1,38 @@
-"""Deploy a serverless model endpoint in Azure AI Foundry (Azure ML workspace)."""
+"""Deploy a model in Azure AI Foundry (new-style Account-based project).
+
+Uses the CognitiveServices ARM REST API via `az rest` — no azure-ai-ml SDK needed.
+Account name is parsed from AZURE_AI_FOUNDRY_PROJECT_ENDPOINT automatically.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
-
-from azure.identity import DefaultAzureCredential
-
-try:
-    from azure.ai.ml import MLClient
-    from azure.ai.ml.entities import ServerlessEndpoint
-except ImportError:
-    MLClient = None  # type: ignore[assignment,misc]
-    ServerlessEndpoint = None  # type: ignore[assignment]
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Supported models mapped to their Foundry/Azure AI model IDs.
-# Keys are the display names shown in the workflow dropdown.
-SUPPORTED_MODELS: dict[str, str] = {
-    "gpt-4.1": "gpt-4.1",
-    "gpt-4.1-mini": "gpt-4.1-mini",
-    "gpt-5.4": "gpt-5.4",
-    "gpt-5.4-mini": "gpt-5.4-mini",
-    "claude-opus-4.5": "claude-opus-4-5",
-    "claude-opus-5": "claude-opus-5",
-    "claude-sonnet-4.5": "claude-sonnet-4-5",
+# Supported models: display name → ARM deployment config.
+# format: "OpenAI" for GPT models, "Anthropic" for Claude models.
+SUPPORTED_MODELS: dict[str, dict[str, str]] = {
+    "gpt-4.1":          {"name": "gpt-4.1",          "format": "OpenAI"},
+    "gpt-4.1-mini":     {"name": "gpt-4.1-mini",     "format": "OpenAI"},
+    "gpt-5.4":          {"name": "gpt-5.4",          "format": "OpenAI"},
+    "gpt-5.4-mini":     {"name": "gpt-5.4-mini",     "format": "OpenAI"},
+    "claude-opus-4.5":  {"name": "claude-opus-4-5",  "format": "Anthropic"},
+    "claude-opus-5":    {"name": "claude-opus-5",    "format": "Anthropic"},
+    "claude-sonnet-4.5":{"name": "claude-sonnet-4-5","format": "Anthropic"},
 }
+
+# CognitiveServices management API version
+MGMT_API_VERSION = "2025-01-01-preview"
 
 POLL_INTERVAL_SECONDS = 15
 DEPLOY_TIMEOUT_SECONDS = 600
@@ -44,125 +45,149 @@ def _get_required_env(name: str) -> str:
     return value
 
 
-def _wait_for_endpoint(
-    *,
-    ml_client: "MLClient",
-    endpoint_name: str,
-    timeout: int = DEPLOY_TIMEOUT_SECONDS,
-) -> tuple[bool, str]:
-    """Poll until endpoint provisioning state reaches a terminal state."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            ep = ml_client.serverless_endpoints.get(endpoint_name)
-            state = str(getattr(ep, "provisioning_state", "")).lower()
-            print(f"[deploy-model] Endpoint '{endpoint_name}' provisioning state: {state}")
-            if state == "succeeded":
-                scoring_uri = getattr(ep, "scoring_uri", None) or ""
-                return True, f"Endpoint ready: {scoring_uri}"
-            if state in {"failed", "canceled", "cancelled"}:
-                return False, f"Endpoint provisioning failed with state: {state}"
-        except Exception as exc:
-            print(f"[deploy-model] Warning: status poll failed: {exc}")
-        time.sleep(POLL_INTERVAL_SECONDS)
-    return False, f"Timed out after {timeout}s waiting for endpoint '{endpoint_name}'"
+def _extract_account_name(endpoint: str) -> str:
+    """Parse the AI Services account name from the project endpoint URL.
+
+    Expected format: https://<account>.services.ai.azure.com/api/projects/<project>
+    """
+    match = re.match(r"https?://([^.]+)\.services\.ai\.azure\.com", endpoint.strip())
+    if not match:
+        raise ValueError(
+            f"Cannot parse account name from endpoint: {endpoint!r}. "
+            "Expected format: https://<account>.services.ai.azure.com/..."
+        )
+    return match.group(1)
+
+
+def _az_rest(method: str, url: str, body: dict | None = None) -> subprocess.CompletedProcess:
+    cmd = ["az", "rest", "--method", method, "--url", url,
+           "--headers", "Content-Type=application/json"]
+    if body is not None:
+        cmd += ["--body", json.dumps(body)]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _get_deployment_state(
+    subscription_id: str, resource_group: str, account_name: str, deployment_name: str
+) -> str | None:
+    """Return lower-case provisioning state, or None if not found."""
+    url = (
+        f"https://management.azure.com/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
+        f"/deployments/{deployment_name}?api-version={MGMT_API_VERSION}"
+    )
+    result = _az_rest("GET", url)
+    if result.returncode != 0:
+        stderr = result.stderr or result.stdout
+        if "ResourceNotFound" in stderr or "404" in stderr or "NotFound" in stderr:
+            return None
+        print(f"[deploy-model] Warning: GET deployment returned error: {stderr.strip()[:200]}")
+        return None
+    try:
+        data = json.loads(result.stdout)
+        return str(data.get("properties", {}).get("provisioningState", "")).lower()
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+def _create_deployment(
+    subscription_id: str, resource_group: str, account_name: str,
+    deployment_name: str, model_info: dict[str, str],
+) -> bool:
+    url = (
+        f"https://management.azure.com/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
+        f"/deployments/{deployment_name}?api-version={MGMT_API_VERSION}"
+    )
+    body: dict = {
+        "sku": {"name": "Standard", "capacity": 1},
+        "properties": {
+            "model": {
+                "format": model_info["format"],
+                "name": model_info["name"],
+            }
+        },
+    }
+    result = _az_rest("PUT", url, body)
+    if result.returncode != 0:
+        print(f"[deploy-model] Failed to create deployment:\n{(result.stderr or result.stdout).strip()}")
+        return False
+    return True
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Deploy a serverless model to Azure AI Foundry")
+    parser = argparse.ArgumentParser(description="Deploy a model to Azure AI Foundry Account")
     parser.add_argument(
-        "--model",
-        required=True,
-        choices=list(SUPPORTED_MODELS.keys()),
-        help="Model to deploy (must match a supported model name).",
+        "--model", required=True, choices=list(SUPPORTED_MODELS.keys()),
+        help="Model to deploy (display name from the workflow dropdown).",
     )
     parser.add_argument(
-        "--endpoint-name",
-        default=None,
-        help="Custom endpoint name. Defaults to '<model-name>-endpoint'.",
+        "--endpoint-name", default=None,
+        help="Custom deployment name. Defaults to '<model-name>' with dots replaced by hyphens.",
     )
     parser.add_argument(
-        "--no-wait",
-        action="store_true",
-        help="Return immediately after creating the endpoint without waiting for provisioning.",
+        "--no-wait", action="store_true",
+        help="Return immediately after submitting the create request.",
     )
     args = parser.parse_args()
-
-    if MLClient is None or ServerlessEndpoint is None:
-        print("[deploy-model] azure-ai-ml is not installed. Run: pip install -r requirements.txt")
-        return 1
 
     try:
         subscription_id = _get_required_env("AZURE_SUBSCRIPTION_ID")
         resource_group = _get_required_env("AZURE_RESOURCE_GROUP")
-        workspace_name = _get_required_env("AZURE_AI_FOUNDRY_PROJECT_NAME")
+        project_endpoint = _get_required_env("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
+        account_name = _extract_account_name(project_endpoint)
     except ValueError as exc:
         print(f"[deploy-model] Configuration error: {exc}")
         return 1
 
-    model_id = SUPPORTED_MODELS[args.model]
-    endpoint_name = args.endpoint_name or f"{args.model.replace('.', '-')}-endpoint"
+    model_info = SUPPORTED_MODELS[args.model]
+    deployment_name = args.endpoint_name or args.model.replace(".", "-")
 
-    print(f"[deploy-model] Model: {args.model} (ID: {model_id})")
-    print(f"[deploy-model] Endpoint name: {endpoint_name}")
-    print(f"[deploy-model] Workspace: {workspace_name} / {resource_group} / {subscription_id}")
+    print(f"[deploy-model] Model:       {args.model} (format: {model_info['format']}, name: {model_info['name']})")
+    print(f"[deploy-model] Deployment:  {deployment_name}")
+    print(f"[deploy-model] Account:     {account_name}  RG: {resource_group}")
 
-    credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
-    try:
-        ml_client = MLClient(
-            credential=credential,
-            subscription_id=subscription_id,
-            resource_group_name=resource_group,
-            workspace_name=workspace_name,
-        )
-    except Exception as exc:
-        print(f"[deploy-model] Could not create MLClient: {exc}")
-        return 1
-
-    # Check if endpoint already exists
-    try:
-        existing = ml_client.serverless_endpoints.get(endpoint_name)
-        state = str(getattr(existing, "provisioning_state", "")).lower()
-        if state == "succeeded":
-            scoring_uri = getattr(existing, "scoring_uri", "")
-            print(f"[deploy-model] Endpoint '{endpoint_name}' already exists and is ready.")
-            print(f"[deploy-model] Scoring URI: {scoring_uri}")
-            return 0
-        print(f"[deploy-model] Endpoint '{endpoint_name}' exists with state '{state}' — waiting for completion.")
-        if not args.no_wait:
-            ok, message = _wait_for_endpoint(ml_client=ml_client, endpoint_name=endpoint_name)
-            print(f"[deploy-model] {message}")
-            return 0 if ok else 1
+    # --- Idempotency check ---
+    state = _get_deployment_state(subscription_id, resource_group, account_name, deployment_name)
+    if state == "succeeded":
+        print(f"[deploy-model] Deployment '{deployment_name}' already exists and is ready. Nothing to do.")
         return 0
-    except Exception as exc:
-        if "not found" not in str(exc).lower() and "404" not in str(exc):
-            print(f"[deploy-model] Warning: could not check existing endpoint: {exc}")
+    if state in ("creating", "running", "updating", "accepted"):
+        print(f"[deploy-model] Deployment '{deployment_name}' already in progress (state: '{state}').")
+        if args.no_wait:
+            return 0
+        # Fall through to polling loop below
 
-    # Create new serverless endpoint
-    print(f"[deploy-model] Creating serverless endpoint '{endpoint_name}' for model '{model_id}'...")
-    try:
-        endpoint = ServerlessEndpoint(
-            name=endpoint_name,
-            model_id=model_id,
-        )
-        ml_client.serverless_endpoints.begin_create_or_update(endpoint).result(
-            timeout=30  # just start the operation; poll separately
-        )
-    except Exception as exc:
-        # Some SDK versions return before the LRO completes — that is fine
-        if "operation" not in str(exc).lower() and "timed out" not in str(exc).lower():
-            print(f"[deploy-model] Failed to create endpoint: {exc}")
+    if state is None:
+        print(f"[deploy-model] Creating deployment '{deployment_name}'...")
+        if not _create_deployment(
+            subscription_id, resource_group, account_name, deployment_name, model_info
+        ):
             return 1
-
-    print(f"[deploy-model] Endpoint creation initiated.")
+        print(f"[deploy-model] Create request accepted.")
 
     if args.no_wait:
-        print(f"[deploy-model] --no-wait: returning immediately. Check Foundry portal for status.")
+        print(f"[deploy-model] --no-wait set. Check Azure portal for provisioning status.")
         return 0
 
-    ok, message = _wait_for_endpoint(ml_client=ml_client, endpoint_name=endpoint_name)
-    print(f"[deploy-model] {message}")
-    return 0 if ok else 1
+    # --- Poll until terminal state ---
+    print(f"[deploy-model] Polling provisioning state (timeout {DEPLOY_TIMEOUT_SECONDS}s)...")
+    deadline = time.monotonic() + DEPLOY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        state = _get_deployment_state(subscription_id, resource_group, account_name, deployment_name)
+        print(f"[deploy-model] State: {state}")
+        if state == "succeeded":
+            print(f"[deploy-model] ✓ Deployment '{deployment_name}' is ready.")
+            return 0
+        if state in ("failed", "canceled", "cancelled"):
+            print(f"[deploy-model] ✗ Deployment failed with state: {state}")
+            return 1
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    print(f"[deploy-model] Timed out after {DEPLOY_TIMEOUT_SECONDS}s. Check Azure portal for final state.")
+    return 1
 
 
 if __name__ == "__main__":
