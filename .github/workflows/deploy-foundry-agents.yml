@@ -29,7 +29,7 @@ on:
         type: string
         default: ""
       agent_action:
-        description: "Action to perform: deploy | disable | delete"
+        description: "Action to perform: deploy | enable | disable | delete"
         required: false
         type: string
         default: "deploy"
@@ -55,6 +55,7 @@ on:
         type: choice
         options:
           - deploy
+          - enable
           - disable
           - delete
   push:

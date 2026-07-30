@@ -145,13 +145,43 @@ gh repo create architecture-review-board-assistant --private --source=. --remote
 
 ### Workflows
 
-1. `.github/workflows/deploy-foundry-agents.yml`
+1. **`.github/workflows/deploy-foundry-model.yml`** *(run first when adding a new model)*
+   - Manual-only (`workflow_dispatch`)
+   - Provisions a serverless model endpoint in Azure AI Foundry via Azure ML SDK
+   - Inputs: model dropdown, optional endpoint name, **confirm checkbox** (safety gate against accidental cost)
+   - ⚠️ Model deployments incur ongoing cost even when idle — only deploy models you need
+
+2. **`.github/workflows/deploy-foundry-agents.yml`**
    - CI-friendly reusable deployment workflow
-   - supports `push`, `workflow_dispatch`, and `workflow_call`
-   - validates config, runs tests, optional persistent agent deployment, and smoke checks
-2. `.github/workflows/orchestrate-arb-review.yml`
-   - wrapper workflow for end-to-end execution
-   - deploys/updates persistent agents, then invokes all specialist agents plus chairperson and uploads `outputs/arb-review.md` as artifact
+   - Supports `push`, `workflow_dispatch`, and `workflow_call`
+   - Validates config, runs tests, optional persistent agent deployment, and smoke checks
+   - **Model dropdown** — selects from already-deployed models in your Foundry project (deploy models first using workflow 1)
+   - **Agent action dropdown** — `deploy` / `enable` / `disable` / `delete`
+
+3. **`.github/workflows/orchestrate-arb-review.yml`**
+   - Wrapper workflow for end-to-end execution
+   - Deploys/updates persistent agents, then invokes all specialist agents plus chairperson
+   - Uploads `outputs/arb-review.md` as artifact
+   - Orchestration step is automatically skipped when action is `enable`, `disable`, or `delete`
+
+### Typical first-time setup order
+
+```
+1. Run "Deploy Foundry Model"   → provision model endpoint (once per model)
+2. Run "Deploy Foundry Agents"  → create/update agents backed by that model
+3. Run "Orchestrate ARB Review" → run full review pipeline
+```
+
+### Agent lifecycle management
+
+Use the **agent action** dropdown in "Deploy Foundry Agents" or "Orchestrate ARB Review":
+
+| Action | When to use |
+|---|---|
+| `deploy` | Create or update agents (default) |
+| `enable` | Re-enable previously disabled agents |
+| `disable` | Pause agents to save cost (agents still exist; no inference cost when not called) |
+| `delete` | Permanently remove all agents and their versions |
 
 ### Required repository **secrets**
 
@@ -178,27 +208,42 @@ You must configure federated credentials in Microsoft Entra ID for your GitHub r
 
 ```mermaid
 flowchart LR
-    A[GitHub Actions Trigger] --> B[deploy-foundry-agents.yml]
-    B --> B1[Validate required secrets/vars]
-    B1 --> B2[Run unit tests]
-    B2 --> B3[Azure Login OIDC]
-    B3 --> B4[Preflight checks]
-    B4 --> B5[Deploy/Update persistent agents]
-    B5 --> B6[Single-agent smoke test]
+    subgraph "Step 1 — Once per model"
+        M[workflow_dispatch:\ndeploy-foundry-model.yml] --> M1[Confirm deploy checkbox]
+        M1 --> M2[Azure Login OIDC]
+        M2 --> M3[deploy_foundry_model.py\nMLClient serverless endpoint]
+        M3 --> M4[Model endpoint ready\nin Foundry project]
+    end
 
-    C[workflow_dispatch: orchestrate-arb-review.yml] --> D[Call deploy-foundry-agents reusable workflow]
-    D --> E[Run scripts/orchestrate_persistent_agents.py]
-    E --> E1[Invoke Architecture agent]
-    E --> E2[Invoke Security agent]
-    E --> E3[Invoke Cost agent]
-    E --> E4[Invoke Resiliency agent]
-    E1 --> F[Compose chairperson input]
-    E2 --> F
-    E3 --> F
-    E4 --> F
-    F --> G[Invoke ARB chairperson agent]
-    G --> H[Write outputs/arb-review.md]
-    H --> I[Upload artifact]
+    subgraph "Step 2 — Agent lifecycle"
+        A[push / workflow_dispatch /\nworkflow_call] --> B[deploy-foundry-agents.yml]
+        B --> B1[Validate secrets/vars]
+        B1 --> B2[Run unit tests]
+        B2 --> B3[Azure Login OIDC]
+        B3 --> B4{agent_action?}
+        B4 -->|deploy| B5[Preflight checks\n+ Deploy agents]
+        B4 -->|enable| B6[Enable agents]
+        B4 -->|disable| B7[Disable agents]
+        B4 -->|delete| B8[Delete agents]
+        B5 --> B9[Single-agent smoke test]
+    end
+
+    subgraph "Step 3 — Full review pipeline"
+        C[workflow_dispatch:\norchestrate-arb-review.yml] --> D[Call deploy-foundry-agents\nreusable workflow]
+        D --> E[orchestrate_persistent_agents.py]
+        E --> E1[Architecture agent]
+        E --> E2[Security agent]
+        E --> E3[Cost agent]
+        E --> E4[Resiliency agent]
+        E1 --> F[ARB Chairperson agent]
+        E2 --> F
+        E3 --> F
+        E4 --> F
+        F --> G[outputs/arb-review.md]
+        G --> H[Upload artifact]
+    end
+
+    M4 -.->|model available| B5
 ```
 
 ## Cost control notes

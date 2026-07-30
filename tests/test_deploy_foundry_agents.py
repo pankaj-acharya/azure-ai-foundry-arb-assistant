@@ -173,3 +173,76 @@ def test_inference_probe_failure_includes_model_name_and_hint() -> None:
     assert ok is False
     assert "gpt-5.4" in message, "Error message must include the model name tried"
     assert "deploy" in message.lower() or "foundry" in message.lower(), "Error must include remediation hint"
+
+
+def test_preflight_skips_inference_probe_for_enable_action() -> None:
+    """Preflight with action=enable must not call the inference probe."""
+    openai_client = _FakeOpenAIClient()
+
+    class _Client:
+        def get_openai_client(self):
+            return openai_client
+
+    agents_api = _FakeAgentsApi()
+    deploy_script._run_preflight_checks(
+        settings=_FakeSettings(),
+        client=_Client(),
+        agents_api=agents_api,
+        create_or_update=None,
+        create_agent=None,
+        create_version=lambda **_: None,
+        delete_version=None,
+        delete_agent=None,
+        action="enable",
+    )
+    assert openai_client.create_calls == [], "Inference probe must not run for enable action"
+
+
+def test_enable_all_agents_calls_enable_method() -> None:
+    """_enable_all_agents should call agents_api.enable() when available."""
+    enabled_names: list[str] = []
+
+    class _AgentsApiWithEnable:
+        def enable(self, *, agent_name: str) -> None:
+            enabled_names.append(agent_name)
+
+    agent_names = ["architecture-agent", "security-agent"]
+    count, errors = deploy_script._enable_all_agents(
+        agents_api=_AgentsApiWithEnable(),
+        agent_names=agent_names,
+    )
+    assert count == 2
+    assert errors == []
+    assert enabled_names == agent_names
+
+
+def test_enable_all_agents_fallback_to_update_when_no_enable_method() -> None:
+    """_enable_all_agents falls back to update(enabled=True) when enable() not present."""
+    update_calls: list[dict] = []
+
+    class _AgentsApiWithUpdate:
+        def update(self, *, agent_name: str, enabled: bool) -> None:
+            update_calls.append({"agent_name": agent_name, "enabled": enabled})
+
+    agent_names = ["cost-agent"]
+    count, errors = deploy_script._enable_all_agents(
+        agents_api=_AgentsApiWithUpdate(),
+        agent_names=agent_names,
+    )
+    assert count == 1
+    assert update_calls == [{"agent_name": "cost-agent", "enabled": True}]
+
+
+def test_enable_all_agents_portal_fallback_when_no_sdk_method() -> None:
+    """_enable_all_agents appends fallback message when no SDK method available."""
+
+    class _AgentsApiNoEnableOrUpdate:
+        pass
+
+    count, errors = deploy_script._enable_all_agents(
+        agents_api=_AgentsApiNoEnableOrUpdate(),
+        agent_names=["resiliency-agent"],
+    )
+    assert count == 0
+    assert len(errors) == 1
+    assert "portal" in errors[0].lower() or "foundry" in errors[0].lower()

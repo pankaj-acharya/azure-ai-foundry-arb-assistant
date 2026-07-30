@@ -493,6 +493,56 @@ def _disable_all_agents(
     return disabled_count, errors
 
 
+def _enable_all_agents(
+    *,
+    agents_api: Any,
+    agent_names: list[str],
+) -> tuple[int, list[str]]:
+    """Attempt to enable each named agent via available SDK methods."""
+
+    enabled_count = 0
+    errors: list[str] = []
+
+    enable_fn = getattr(agents_api, "enable", None)
+    update_fn = getattr(agents_api, "update", None)
+
+    for name in agent_names:
+        done = False
+
+        if callable(enable_fn):
+            try:
+                enable_fn(agent_name=name)
+                print(f"[manage] Enabled agent: {name}")
+                enabled_count += 1
+                done = True
+            except Exception as exc:
+                if _is_not_found_error(exc):
+                    print(f"[manage] Agent '{name}' not found — deploy it first before enabling")
+                    done = True
+                else:
+                    print(f"[manage] enable() failed for '{name}': {_format_exception_context(exc)}")
+
+        if not done and callable(update_fn):
+            try:
+                update_fn(agent_name=name, enabled=True)
+                print(f"[manage] Enabled agent via update: {name}")
+                enabled_count += 1
+                done = True
+            except Exception as exc:
+                if not _is_not_found_error(exc):
+                    print(f"[manage] update(enabled=True) failed for '{name}': {_format_exception_context(exc)}")
+
+        if not done:
+            msg = (
+                f"SDK enable not available for '{name}'. "
+                "Go to Azure AI Foundry portal → your project → Agents → select agent → toggle Enabled on."
+            )
+            print(f"[manage] {msg}")
+            errors.append(msg)
+
+    return enabled_count, errors
+
+
 def _delete_all_agents(
     *,
     agents_api: Any,
@@ -555,9 +605,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--action",
-        choices=["deploy", "disable", "delete"],
+        choices=["deploy", "disable", "enable", "delete"],
         default="deploy",
-        help="Action to perform: deploy (default), disable, or delete all agents.",
+        help="Action to perform: deploy (default), disable, enable, or delete all agents.",
     )
     args = parser.parse_args()
 
@@ -582,13 +632,17 @@ def main() -> int:
         print("[deploy] Fallback: Keep prompts in src/agent_prompts.py and use local orchestration mode.")
         return 1 if args.strict else 0
 
+    # SDK surface probe — helps verify available methods for enable/disable/delete
+    available_agent_methods = sorted(m for m in dir(agents_api) if not m.startswith("_"))
+    print(f"[sdk-probe] agents_api methods: {', '.join(available_agent_methods)}")
+
     definitions = dict(ALL_PERSISTENT_AGENT_PROMPTS)
     agent_names = list(definitions.keys())
 
     delete_version = getattr(agents_api, "delete_version", None)
     delete_agent = getattr(agents_api, "delete", None)
 
-    # ── Disable / Delete short-circuit paths ──────────────────────────────────
+    # ── Disable / Enable / Delete short-circuit paths ─────────────────────────
     if args.action == "disable":
         print(f"[manage] Disabling {len(agent_names)} agent(s): {', '.join(agent_names)}")
         disabled_count, errors = _disable_all_agents(
@@ -596,6 +650,17 @@ def main() -> int:
             agent_names=agent_names,
         )
         print(f"[manage] Disable complete: {disabled_count} agent(s) processed.")
+        if errors and args.strict:
+            return 1
+        return 0
+
+    if args.action == "enable":
+        print(f"[manage] Enabling {len(agent_names)} agent(s): {', '.join(agent_names)}")
+        enabled_count, errors = _enable_all_agents(
+            agents_api=agents_api,
+            agent_names=agent_names,
+        )
+        print(f"[manage] Enable complete: {enabled_count} agent(s) processed.")
         if errors and args.strict:
             return 1
         return 0

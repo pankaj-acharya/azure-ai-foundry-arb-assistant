@@ -1,0 +1,96 @@
+name: Deploy Foundry Model
+
+# ── Purpose ────────────────────────────────────────────────────────────────────
+# Provisions a serverless model endpoint in Azure AI Foundry.
+# Run this BEFORE the "Deploy Foundry Agents" workflow when you want agents to
+# use a model that is not yet deployed in your project.
+#
+# ⚠️  Model deployments incur cost even when idle. Only deploy models you need.
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: "Model to deploy as a serverless endpoint"
+        required: true
+        default: "gpt-4.1-mini"
+        type: choice
+        options:
+          - gpt-4.1
+          - gpt-4.1-mini
+          - gpt-5.4
+          - gpt-5.4-mini
+          - claude-opus-4.5
+          - claude-opus-5
+          - claude-sonnet-4.5
+      endpoint_name:
+        description: "Custom endpoint name (leave blank for auto-generated)"
+        required: false
+        default: ""
+        type: string
+      confirm_deploy:
+        description: "Tick to confirm — model deployments incur ongoing cost"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-model:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Guard — confirm_deploy must be true
+        if: ${{ inputs.confirm_deploy != 'true' }}
+        run: |
+          echo "::error::confirm_deploy must be set to 'true' to proceed. This prevents accidental model deployments."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create runtime .env
+        shell: bash
+        run: |
+          cat > .env << EOF
+          AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_AI_FOUNDRY_PROJECT_NAME=${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+          EOF
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy model endpoint
+        run: |
+          ENDPOINT_ARG=""
+          if [[ -n "${{ inputs.endpoint_name }}" ]]; then
+            ENDPOINT_ARG="--endpoint-name ${{ inputs.endpoint_name }}"
+          fi
+          python scripts/deploy_foundry_model.py \
+            --model "${{ inputs.model_name }}" \
+            $ENDPOINT_ARG
