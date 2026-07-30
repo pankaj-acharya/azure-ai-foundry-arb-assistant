@@ -32,7 +32,7 @@ SUPPORTED_MODELS: dict[str, dict[str, str]] = {
 }
 
 # CognitiveServices management API version
-MGMT_API_VERSION = "2025-01-01-preview"
+MGMT_API_VERSION = "2025-04-01-preview"
 
 POLL_INTERVAL_SECONDS = 15
 DEPLOY_TIMEOUT_SECONDS = 600
