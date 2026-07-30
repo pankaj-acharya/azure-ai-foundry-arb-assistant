@@ -110,19 +110,21 @@ def _create_deployment(
             }
         },
     }
-    # Anthropic model deployments require ModelProviderData with org details.
+    # Anthropic model deployments require ModelProviderData at the ROOT level.
     if model_info["format"] == "Anthropic":
-        body["properties"]["modelProviderData"] = {
-            "organizationName": os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip(),
-            "countryCode": os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip(),
-            "industry": os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip(),
+        org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
+        country_code = os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip()
+        industry = os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip()
+        body["modelProviderData"] = {
+            "organizationName": org_name,
+            "countryCode": country_code,
+            "industry": industry,
         }
         print(
-            f"[deploy-model] Including ModelProviderData: "
-            f"org={body['properties']['modelProviderData']['organizationName']}, "
-            f"country={body['properties']['modelProviderData']['countryCode']}, "
-            f"industry={body['properties']['modelProviderData']['industry']}"
+            f"[deploy-model] ModelProviderData: "
+            f"org={org_name}, country={country_code}, industry={industry}"
         )
+    print(f"[deploy-model] Request body: {json.dumps(body, indent=2)}")
     result = _az_rest("PUT", url, body)
     if result.returncode != 0:
         print(f"[deploy-model] Failed to create deployment:\n{(result.stderr or result.stdout).strip()}")
