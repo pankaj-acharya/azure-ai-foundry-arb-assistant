@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 # Supported models: display name → deployment config.
 SUPPORTED_MODELS: dict[str, dict[str, str]] = {
+    "gpt-4o":            {"name": "gpt-4o",           "format": "OpenAI"},
     "gpt-4.1":           {"name": "gpt-4.1",          "format": "OpenAI"},
     "gpt-4.1-mini":      {"name": "gpt-4.1-mini",     "format": "OpenAI"},
     "gpt-5.4":           {"name": "gpt-5.4",          "format": "OpenAI"},
@@ -99,7 +100,7 @@ def _list_and_check_existing(
 def _get_available_model_version(
     resource_group: str, account_name: str, model_format: str, model_name: str
 ) -> str | None:
-    """Query the account's available models and return the latest version for model_name."""
+    """Query the account's available models and return the latest non-deprecated version."""
     result = subprocess.run(
         ["az", "cognitiveservices", "account", "list-models",
          "--resource-group", resource_group, "--name", account_name, "--output", "json"],
@@ -115,25 +116,48 @@ def _get_available_model_version(
             mfmt = m.get("format") or m.get("modelFormat") or "?"
             mname = m.get("name") or m.get("modelName") or "?"
             mver = m.get("version") or m.get("modelVersion") or "?"
-            print(f"  catalog: {mfmt}/{mname}  version={mver}")
+            mlc = m.get("lifecycleStatus") or m.get("status") or "?"
+            print(f"  catalog: {mfmt}/{mname}  version={mver}  lifecycle={mlc}")
 
+        # Collect all matching (version, lifecycleStatus) pairs
+        DEPRECATED_STATES = {"deprecated", "deprecating", "retiring", "retired"}
+        candidates: list[tuple[str, str]] = []
         for m in models:
             fmt = (m.get("format") or m.get("modelFormat") or "").lower()
             name = (m.get("name") or m.get("modelName") or "").lower()
-            if fmt == model_format.lower() and name == model_name.lower():
-                version = (
-                    m.get("version") or m.get("modelVersion") or
-                    (m.get("deprecation") or {}).get("fineTune") or ""
-                )
-                if not version:
-                    versions = m.get("versions") or m.get("modelVersions") or []
-                    version = str(versions[-1]) if versions else ""
-                if version:
-                    print(f"[deploy-model] Found version: {version}")
-                    return str(version)
-        print(f"[deploy-model] Warning: {model_format}/{model_name} not found in catalog")
-        return None
-    except (json.JSONDecodeError, AttributeError, IndexError):
+            if fmt != model_format.lower() or name != model_name.lower():
+                continue
+            version = (
+                m.get("version") or m.get("modelVersion") or
+                (m.get("deprecation") or {}).get("fineTune") or ""
+            )
+            if not version:
+                versions = m.get("versions") or m.get("modelVersions") or []
+                version = str(versions[-1]) if versions else ""
+            lc = (m.get("lifecycleStatus") or m.get("status") or "").lower()
+            if version:
+                candidates.append((version, lc))
+
+        if not candidates:
+            print(f"[deploy-model] Warning: {model_format}/{model_name} not found in catalog")
+            return None
+
+        # Prefer non-deprecated; fall back to all if every version is deprecated
+        active = [(v, lc) for v, lc in candidates if lc not in DEPRECATED_STATES]
+        pool = sorted(active or candidates, key=lambda x: x[0])
+        chosen_version, chosen_lc = pool[-1]
+
+        if chosen_lc in DEPRECATED_STATES:
+            print(
+                f"[deploy-model] Warning: all versions of {model_format}/{model_name} are deprecated. "
+                f"Proceeding with latest ({chosen_version}) anyway."
+            )
+        else:
+            print(f"[deploy-model] Found version: {chosen_version}  lifecycle={chosen_lc}")
+        return chosen_version
+
+    except (json.JSONDecodeError, AttributeError, IndexError) as exc:
+        print(f"[deploy-model] Warning: failed to parse list-models output: {exc}")
         return None
 
 
