@@ -96,9 +96,45 @@ def _list_and_check_existing(
         return None
 
 
+def _get_available_model_version(
+    resource_group: str, account_name: str, model_format: str, model_name: str
+) -> str | None:
+    """Query the account's available models and return the latest version for model_name."""
+    result = subprocess.run(
+        ["az", "cognitiveservices", "account", "list-models",
+         "--resource-group", resource_group, "--name", account_name, "--output", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"[deploy-model] Warning: list-models failed: {result.stderr.strip()[:200]}")
+        return None
+    try:
+        models = json.loads(result.stdout)
+        for m in models:
+            fmt = (m.get("format") or m.get("modelFormat") or "").lower()
+            name = (m.get("name") or m.get("modelName") or "").lower()
+            if fmt == model_format.lower() and name == model_name.lower():
+                # Try common version fields
+                version = (
+                    m.get("version") or m.get("modelVersion") or
+                    (m.get("deprecation") or {}).get("fineTune") or ""
+                )
+                if not version:
+                    versions = m.get("versions") or m.get("modelVersions") or []
+                    version = str(versions[-1]) if versions else ""
+                if version:
+                    print(f"[deploy-model] Found model version: {version}")
+                    return str(version)
+        print(f"[deploy-model] Warning: model {model_format}/{model_name} not found in list-models output")
+        return None
+    except (json.JSONDecodeError, AttributeError, IndexError):
+        return None
+
+
 def _create_via_cli(
     subscription_id: str, resource_group: str, account_name: str,
     deployment_name: str, model_info: dict[str, str],
+    model_version: str,
 ) -> bool:
     """Create deployment using `az cognitiveservices account deployment create`."""
     org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
@@ -113,6 +149,7 @@ def _create_via_cli(
         "--deployment-name", deployment_name,
         "--model-format", model_info["format"],
         "--model-name", model_info["name"],
+        "--model-version", model_version,
         "--sku-name", "Standard",
         "--sku-capacity", "1",
     ]
@@ -187,8 +224,22 @@ def main() -> int:
         # Fall through to polling
 
     if state is None:
-        print(f"[deploy-model] Creating deployment '{deployment_name}'...")
-        if not _create_via_cli(subscription_id, resource_group, account_name, deployment_name, model_info):
+        # Discover the model version from the account's model catalog
+        model_version = _get_available_model_version(
+            resource_group, account_name, model_info["format"], model_info["name"]
+        )
+        if not model_version:
+            print(
+                f"[deploy-model] Could not determine model version for "
+                f"{model_info['format']}/{model_info['name']}.\n"
+                f"[deploy-model] The model may not be available in account '{account_name}'.\n"
+                f"[deploy-model] Check Azure AI Foundry portal → Model Catalog for available models."
+            )
+            return 1
+        print(f"[deploy-model] Creating deployment '{deployment_name}' (version: {model_version})...")
+        if not _create_via_cli(
+            subscription_id, resource_group, account_name, deployment_name, model_info, model_version
+        ):
             return 1
         print(f"[deploy-model] Create request submitted.")
 
