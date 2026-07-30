@@ -1,7 +1,8 @@
 """Deploy a model in Azure AI Foundry (new-style Account-based project).
 
-Uses the CognitiveServices ARM REST API via `az rest` — no azure-ai-ml SDK needed.
-Account name is parsed from AZURE_AI_FOUNDRY_PROJECT_ENDPOINT automatically.
+Uses `az cognitiveservices account deployment create` (official CLI) which
+correctly handles provider-specific schema requirements for Anthropic/OpenAI.
+Account name is parsed automatically from AZURE_AI_FOUNDRY_PROJECT_ENDPOINT.
 """
 
 from __future__ import annotations
@@ -19,21 +20,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Supported models: display name → ARM deployment config.
-# format: "OpenAI" for GPT models, "Anthropic" for Claude models.
+# Supported models: display name → deployment config.
 SUPPORTED_MODELS: dict[str, dict[str, str]] = {
-    "gpt-4.1":          {"name": "gpt-4.1",          "format": "OpenAI"},
-    "gpt-4.1-mini":     {"name": "gpt-4.1-mini",     "format": "OpenAI"},
-    "gpt-5.4":          {"name": "gpt-5.4",          "format": "OpenAI"},
-    "gpt-5.4-mini":     {"name": "gpt-5.4-mini",     "format": "OpenAI"},
-    "claude-opus-4.5":  {"name": "claude-opus-4-5",  "format": "Anthropic"},
-    "claude-opus-5":    {"name": "claude-opus-5",    "format": "Anthropic"},
-    "claude-sonnet-4.5":{"name": "claude-sonnet-4-5","format": "Anthropic"},
+    "gpt-4.1":           {"name": "gpt-4.1",          "format": "OpenAI"},
+    "gpt-4.1-mini":      {"name": "gpt-4.1-mini",     "format": "OpenAI"},
+    "gpt-5.4":           {"name": "gpt-5.4",          "format": "OpenAI"},
+    "gpt-5.4-mini":      {"name": "gpt-5.4-mini",     "format": "OpenAI"},
+    "claude-opus-4.5":   {"name": "claude-opus-4-5",  "format": "Anthropic"},
+    "claude-opus-5":     {"name": "claude-opus-5",    "format": "Anthropic"},
+    "claude-sonnet-4.5": {"name": "claude-sonnet-4-5","format": "Anthropic"},
 }
 
-# CognitiveServices management API version
 MGMT_API_VERSION = "2025-04-01-preview"
-
 POLL_INTERVAL_SECONDS = 15
 DEPLOY_TIMEOUT_SECONDS = 600
 
@@ -46,106 +44,119 @@ def _get_required_env(name: str) -> str:
 
 
 def _extract_account_name(endpoint: str) -> str:
-    """Parse the AI Services account name from the project endpoint URL.
-
-    Expected format: https://<account>.services.ai.azure.com/api/projects/<project>
-    """
+    """Parse account name from https://<account>.services.ai.azure.com/..."""
     match = re.match(r"https?://([^.]+)\.services\.ai\.azure\.com", endpoint.strip())
     if not match:
         raise ValueError(
             f"Cannot parse account name from endpoint: {endpoint!r}. "
-            "Expected format: https://<account>.services.ai.azure.com/..."
+            "Expected: https://<account>.services.ai.azure.com/..."
         )
     return match.group(1)
 
 
-def _az_rest(method: str, url: str, body: dict | None = None) -> subprocess.CompletedProcess:
-    cmd = ["az", "rest", "--method", method, "--url", url,
-           "--headers", "Content-Type=application/json"]
-    if body is not None:
-        cmd += ["--body", json.dumps(body)]
-    return subprocess.run(cmd, capture_output=True, text=True)
+def _az(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["az", *args], capture_output=True, text=True)
 
 
-def _get_deployment_state(
+def _az_rest(method: str, url: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["az", "rest", "--method", method, "--url", url,
+         "--headers", "Content-Type=application/json"],
+        capture_output=True, text=True
+    )
+
+
+def _list_and_check_existing(
     subscription_id: str, resource_group: str, account_name: str, deployment_name: str
 ) -> str | None:
-    """Return lower-case provisioning state, or None if not found."""
+    """List all deployments and return state for deployment_name (or None if absent)."""
     url = (
         f"https://management.azure.com/subscriptions/{subscription_id}"
         f"/resourceGroups/{resource_group}"
         f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
-        f"/deployments/{deployment_name}?api-version={MGMT_API_VERSION}"
+        f"/deployments?api-version={MGMT_API_VERSION}"
     )
     result = _az_rest("GET", url)
     if result.returncode != 0:
-        stderr = result.stderr or result.stdout
-        if "ResourceNotFound" in stderr or "404" in stderr or "NotFound" in stderr:
-            return None
-        print(f"[deploy-model] Warning: GET deployment returned error: {stderr.strip()[:200]}")
+        print(f"[deploy-model] Warning: could not list deployments: {(result.stderr or result.stdout).strip()[:300]}")
         return None
     try:
         data = json.loads(result.stdout)
-        return str(data.get("properties", {}).get("provisioningState", "")).lower()
+        deployments = data.get("value", [])
+        print(f"[deploy-model] Existing deployments in account ({len(deployments)}):")
+        for d in deployments:
+            dname = d.get("name", "?")
+            dstate = d.get("properties", {}).get("provisioningState", "?")
+            dmodel = d.get("properties", {}).get("model", {}).get("name", "?")
+            print(f"  - {dname}  model={dmodel}  state={dstate}")
+            if dname.lower() == deployment_name.lower():
+                return str(dstate).lower()
+        return None
     except (json.JSONDecodeError, AttributeError):
         return None
 
 
-def _create_deployment(
+def _create_via_cli(
     subscription_id: str, resource_group: str, account_name: str,
     deployment_name: str, model_info: dict[str, str],
 ) -> bool:
-    url = (
-        f"https://management.azure.com/subscriptions/{subscription_id}"
-        f"/resourceGroups/{resource_group}"
-        f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
-        f"/deployments/{deployment_name}?api-version={MGMT_API_VERSION}"
-    )
-    body: dict = {
-        "sku": {"name": "Standard", "capacity": 1},
-        "properties": {
-            "model": {
-                "format": model_info["format"],
-                "name": model_info["name"],
-            }
-        },
-    }
-    # Anthropic model deployments require ModelProviderData at the ROOT level.
+    """Create deployment using `az cognitiveservices account deployment create`."""
+    org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
+    country_code = os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip()
+    industry = os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip()
+
+    cmd = [
+        "az", "cognitiveservices", "account", "deployment", "create",
+        "--subscription", subscription_id,
+        "--resource-group", resource_group,
+        "--name", account_name,
+        "--deployment-name", deployment_name,
+        "--model-format", model_info["format"],
+        "--model-name", model_info["name"],
+        "--sku-name", "Standard",
+        "--sku-capacity", "1",
+    ]
+
     if model_info["format"] == "Anthropic":
-        org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
-        country_code = os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip()
-        industry = os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip()
-        body["modelProviderData"] = {
+        # Pass provider data as a JSON blob.  Azure CLI sends it correctly.
+        provider_data = json.dumps({
             "organizationName": org_name,
             "countryCode": country_code,
             "industry": industry,
-        }
-        print(
-            f"[deploy-model] ModelProviderData: "
-            f"org={org_name}, country={country_code}, industry={industry}"
-        )
-    print(f"[deploy-model] Request body: {json.dumps(body, indent=2)}")
-    result = _az_rest("PUT", url, body)
+        })
+        cmd += ["--model-provider-data", provider_data]
+        print(f"[deploy-model] ModelProviderData: org={org_name} country={country_code} industry={industry}")
+
+    print(f"[deploy-model] Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+
     if result.returncode != 0:
-        print(f"[deploy-model] Failed to create deployment:\n{(result.stderr or result.stdout).strip()}")
-        return False
+        # Check if --model-provider-data flag is unknown in this CLI version
+        if "model-provider-data" in stderr and "unrecognized" in stderr.lower():
+            print("[deploy-model] --model-provider-data not supported by this CLI version. Retrying without it...")
+            cmd = [c for c in cmd if c not in ("--model-provider-data", provider_data)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+
+        if result.returncode != 0:
+            print(f"[deploy-model] CLI deployment create failed:\n{stderr or stdout}")
+            return False
+
+    if stdout:
+        print(f"[deploy-model] Response: {stdout[:500]}")
     return True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deploy a model to Azure AI Foundry Account")
-    parser.add_argument(
-        "--model", required=True, choices=list(SUPPORTED_MODELS.keys()),
-        help="Model to deploy (display name from the workflow dropdown).",
-    )
-    parser.add_argument(
-        "--endpoint-name", default=None,
-        help="Custom deployment name. Defaults to '<model-name>' with dots replaced by hyphens.",
-    )
-    parser.add_argument(
-        "--no-wait", action="store_true",
-        help="Return immediately after submitting the create request.",
-    )
+    parser.add_argument("--model", required=True, choices=list(SUPPORTED_MODELS.keys()))
+    parser.add_argument("--endpoint-name", default=None,
+                        help="Custom deployment name. Defaults to model name with dots→hyphens.")
+    parser.add_argument("--no-wait", action="store_true",
+                        help="Return immediately after submitting the create request.")
     args = parser.parse_args()
 
     try:
@@ -160,12 +171,12 @@ def main() -> int:
     model_info = SUPPORTED_MODELS[args.model]
     deployment_name = args.endpoint_name or args.model.replace(".", "-")
 
-    print(f"[deploy-model] Model:       {args.model} (format: {model_info['format']}, name: {model_info['name']})")
-    print(f"[deploy-model] Deployment:  {deployment_name}")
-    print(f"[deploy-model] Account:     {account_name}  RG: {resource_group}")
+    print(f"[deploy-model] Model:      {args.model}  (format: {model_info['format']}, id: {model_info['name']})")
+    print(f"[deploy-model] Deployment: {deployment_name}")
+    print(f"[deploy-model] Account:    {account_name}  RG: {resource_group}")
 
-    # --- Idempotency check ---
-    state = _get_deployment_state(subscription_id, resource_group, account_name, deployment_name)
+    # List existing + idempotency check
+    state = _list_and_check_existing(subscription_id, resource_group, account_name, deployment_name)
     if state == "succeeded":
         print(f"[deploy-model] Deployment '{deployment_name}' already exists and is ready. Nothing to do.")
         return 0
@@ -173,35 +184,35 @@ def main() -> int:
         print(f"[deploy-model] Deployment '{deployment_name}' already in progress (state: '{state}').")
         if args.no_wait:
             return 0
-        # Fall through to polling loop below
+        # Fall through to polling
 
     if state is None:
         print(f"[deploy-model] Creating deployment '{deployment_name}'...")
-        if not _create_deployment(
-            subscription_id, resource_group, account_name, deployment_name, model_info
-        ):
+        if not _create_via_cli(subscription_id, resource_group, account_name, deployment_name, model_info):
             return 1
-        print(f"[deploy-model] Create request accepted.")
+        print(f"[deploy-model] Create request submitted.")
 
     if args.no_wait:
-        print(f"[deploy-model] --no-wait set. Check Azure portal for provisioning status.")
+        print("[deploy-model] --no-wait: check Azure portal for provisioning status.")
         return 0
 
-    # --- Poll until terminal state ---
-    print(f"[deploy-model] Polling provisioning state (timeout {DEPLOY_TIMEOUT_SECONDS}s)...")
+    # Poll until terminal state
+    print(f"[deploy-model] Polling (timeout {DEPLOY_TIMEOUT_SECONDS}s)...")
     deadline = time.monotonic() + DEPLOY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        state = _get_deployment_state(subscription_id, resource_group, account_name, deployment_name)
+        state = _list_and_check_existing(subscription_id, resource_group, account_name, deployment_name)
         print(f"[deploy-model] State: {state}")
         if state == "succeeded":
-            print(f"[deploy-model] ✓ Deployment '{deployment_name}' is ready.")
+            print(f"[deploy-model] Deployment '{deployment_name}' is ready.")
             return 0
         if state in ("failed", "canceled", "cancelled"):
-            print(f"[deploy-model] ✗ Deployment failed with state: {state}")
+            print(f"[deploy-model] Deployment failed (state: {state}).")
             return 1
+        if state is None:
+            print("[deploy-model] Deployment not found during poll - it may have just been created.")
         time.sleep(POLL_INTERVAL_SECONDS)
 
-    print(f"[deploy-model] Timed out after {DEPLOY_TIMEOUT_SECONDS}s. Check Azure portal for final state.")
+    print(f"[deploy-model] Timed out after {DEPLOY_TIMEOUT_SECONDS}s. Check Azure portal.")
     return 1
 
 
