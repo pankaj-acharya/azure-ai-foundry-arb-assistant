@@ -17,11 +17,13 @@ on:
         default: "gpt-4.1-mini"
         type: choice
         options:
+          - gpt-5
+          - gpt-5-mini
+          - gpt-5.4
+          - gpt-5.4-mini
           - gpt-4o
           - gpt-4.1
           - gpt-4.1-mini
-          - gpt-5.4
-          - gpt-5.4-mini
           - claude-opus-4.5
           - claude-opus-5
           - claude-sonnet-4.5

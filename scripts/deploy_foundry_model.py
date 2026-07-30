@@ -22,11 +22,13 @@ if str(ROOT) not in sys.path:
 
 # Supported models: display name → deployment config.
 SUPPORTED_MODELS: dict[str, dict[str, str]] = {
+    "gpt-5":             {"name": "gpt-5",            "format": "OpenAI"},
+    "gpt-5-mini":        {"name": "gpt-5-mini",       "format": "OpenAI"},
+    "gpt-5.4":           {"name": "gpt-5.4",          "format": "OpenAI"},
+    "gpt-5.4-mini":      {"name": "gpt-5.4-mini",     "format": "OpenAI"},
     "gpt-4o":            {"name": "gpt-4o",           "format": "OpenAI"},
     "gpt-4.1":           {"name": "gpt-4.1",          "format": "OpenAI"},
     "gpt-4.1-mini":      {"name": "gpt-4.1-mini",     "format": "OpenAI"},
-    "gpt-5.4":           {"name": "gpt-5.4",          "format": "OpenAI"},
-    "gpt-5.4-mini":      {"name": "gpt-5.4-mini",     "format": "OpenAI"},
     "claude-opus-4.5":   {"name": "claude-opus-4-5",  "format": "Anthropic"},
     "claude-opus-5":     {"name": "claude-opus-5",    "format": "Anthropic"},
     "claude-sonnet-4.5": {"name": "claude-sonnet-4-5","format": "Anthropic"},
@@ -142,18 +144,21 @@ def _get_available_model_version(
             print(f"[deploy-model] Warning: {model_format}/{model_name} not found in catalog")
             return None
 
-        # Prefer non-deprecated; fall back to all if every version is deprecated
+        # Prefer non-deprecated; fail cleanly if all are deprecated
         active = [(v, lc) for v, lc in candidates if lc not in DEPRECATED_STATES]
-        pool = sorted(active or candidates, key=lambda x: x[0])
-        chosen_version, chosen_lc = pool[-1]
-
-        if chosen_lc in DEPRECATED_STATES:
+        if not active:
+            versions_str = ", ".join(v for v, _ in candidates)
             print(
-                f"[deploy-model] Warning: all versions of {model_format}/{model_name} are deprecated. "
-                f"Proceeding with latest ({chosen_version}) anyway."
+                f"[deploy-model] ERROR: all versions of {model_format}/{model_name} are deprecated "
+                f"({versions_str}) and cannot be used for new deployments.\n"
+                f"[deploy-model] Please choose a model with GenerallyAvailable lifecycle status "
+                f"(e.g. gpt-5.4, gpt-5.4-mini, gpt-5)."
             )
-        else:
-            print(f"[deploy-model] Found version: {chosen_version}  lifecycle={chosen_lc}")
+            return None
+
+        pool = sorted(active, key=lambda x: x[0])
+        chosen_version, chosen_lc = pool[-1]
+        print(f"[deploy-model] Found version: {chosen_version}  lifecycle={chosen_lc}")
         return chosen_version
 
     except (json.JSONDecodeError, AttributeError, IndexError) as exc:
