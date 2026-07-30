@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 # Ensure the repo root is on sys.path so scripts/ is importable in all test runners.
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,54 @@ class _FakeHttpError(Exception):
         self.model = _FakeErrorModel(error_code)
 
 
+class _FakeSettings:
+    azure_ai_foundry_project_endpoint = "https://example.services.ai.azure.com/api/projects/demo"
+    azure_ai_foundry_model_deployment_name = "gpt-4.1"
+
+
+class _FakeAgentsApi:
+    def __init__(self) -> None:
+        self.list_called = False
+
+    def list(self, limit: int = 1):
+        self.list_called = True
+        return []
+
+
+class _FakeOpenAIClient:
+    def __init__(self, *, raise_on_create: Exception | None = None) -> None:
+        self._raise = raise_on_create
+        self.create_calls: list[dict] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    @property
+    def responses(self):
+        outer = self
+
+        class _Responses:
+            def create(self_, **kwargs):
+                outer.create_calls.append(kwargs)
+                if outer._raise:
+                    raise outer._raise
+                return SimpleNamespace(output_text="ok")
+
+        return _Responses()
+
+
+class _FakeProjectClient:
+    def __init__(self, *, raise_on_inference: Exception | None = None) -> None:
+        self._raise = raise_on_inference
+        self._openai_client = _FakeOpenAIClient(raise_on_create=raise_on_inference)
+
+    def get_openai_client(self):
+        return self._openai_client
+
+
 def test_validate_project_endpoint_format_accepts_expected_shape() -> None:
     ok, message = deploy_script._validate_project_endpoint_format(
         "https://archreviewassistant.services.ai.azure.com/api/projects/my-foundry-project"
@@ -63,3 +112,64 @@ def test_format_exception_context_includes_status_code_service_code_and_request_
 def test_is_permission_error_detects_permissiondenied_service_code() -> None:
     exc = _FakeHttpError("forbidden", status_code=403, error_code="PermissionDenied")
     assert deploy_script._is_permission_error(exc) is True
+
+
+def test_preflight_skips_inference_probe_for_disable_action() -> None:
+    """Preflight with action=disable must not call the inference probe."""
+    openai_client = _FakeOpenAIClient()
+
+    class _Client:
+        def get_openai_client(self):
+            return openai_client
+
+    agents_api = _FakeAgentsApi()
+    ok, errors = deploy_script._run_preflight_checks(
+        settings=_FakeSettings(),
+        client=_Client(),
+        agents_api=agents_api,
+        create_or_update=None,
+        create_agent=None,
+        create_version=lambda **_: None,
+        delete_version=None,
+        delete_agent=None,
+        action="disable",
+    )
+    assert openai_client.create_calls == [], "Inference probe must not run for disable action"
+    assert agents_api.list_called, "Agents list probe should still run"
+
+
+def test_preflight_skips_inference_probe_for_delete_action() -> None:
+    """Preflight with action=delete must not call the inference probe."""
+    openai_client = _FakeOpenAIClient()
+
+    class _Client:
+        def get_openai_client(self):
+            return openai_client
+
+    agents_api = _FakeAgentsApi()
+    deploy_script._run_preflight_checks(
+        settings=_FakeSettings(),
+        client=_Client(),
+        agents_api=agents_api,
+        create_or_update=None,
+        create_agent=None,
+        create_version=lambda **_: None,
+        delete_version=None,
+        delete_agent=None,
+        action="delete",
+    )
+    assert openai_client.create_calls == [], "Inference probe must not run for delete action"
+
+
+def test_inference_probe_failure_includes_model_name_and_hint() -> None:
+    """DeploymentNotFound inference failure should name the model and explain how to fix it."""
+    not_found_exc = _FakeHttpError("not found", status_code=404, error_code="DeploymentNotFound")
+
+    class _Client:
+        def get_openai_client(self):
+            return _FakeOpenAIClient(raise_on_create=not_found_exc)
+
+    ok, message = deploy_script._preflight_chat_probe(_Client(), "gpt-5.4")
+    assert ok is False
+    assert "gpt-5.4" in message, "Error message must include the model name tried"
+    assert "deploy" in message.lower() or "foundry" in message.lower(), "Error must include remediation hint"

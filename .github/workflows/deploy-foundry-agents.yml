@@ -156,7 +156,7 @@ jobs:
 
       - name: Preflight Foundry checks
         if: ${{ env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'true' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'TRUE' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'True' }}
-        run: python scripts/deploy_foundry_agents.py --preflight-only --strict
+        run: python scripts/deploy_foundry_agents.py --preflight-only --strict --action ${{ env.AGENT_ACTION }}
 
       - name: Deploy/Update Foundry agents
         if: ${{ env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'true' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'TRUE' || env.ENABLE_PERSISTENT_AGENT_DEPLOY == 'True' }}

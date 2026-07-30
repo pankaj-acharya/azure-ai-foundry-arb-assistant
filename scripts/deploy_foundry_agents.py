@@ -319,7 +319,16 @@ def _preflight_chat_probe(client: Any, model_name: str) -> tuple[bool, str]:
                 return True, "Inference probe succeeded via get_openai_client().responses.create()"
             return True, "Inference probe succeeded via responses API"
     except Exception as exc:
-        return False, f"Inference probe failed: {_format_exception_context(exc)}"
+        context = _format_exception_context(exc)
+        is_not_found = _is_not_found_error(exc) or "deploymentnotfound" in str(exc).lower()
+        if is_not_found:
+            return False, (
+                f"Inference probe failed: model deployment '{model_name}' was not found in this Foundry project. "
+                "To fix: go to Azure AI Foundry portal → your project → Models + endpoints → deploy this model, "
+                "or select a model that is already deployed. "
+                f"Details: {context}"
+            )
+        return False, f"Inference probe failed: {context}"
 
 
 def _preflight_agents_list_probe(agents_api: Any) -> tuple[bool, str]:
@@ -383,10 +392,12 @@ def _run_preflight_checks(
     create_version: Callable[..., Any] | None,
     delete_version: Callable[..., Any] | None,
     delete_agent: Callable[..., Any] | None,
+    action: str = "deploy",
 ) -> tuple[bool, list[str]]:
     """Validate endpoint, model deployment, and agent API readiness before deploy."""
 
     errors: list[str] = []
+    needs_model_inference = action == "deploy"
 
     endpoint_ok, endpoint_message = _validate_project_endpoint_format(settings.azure_ai_foundry_project_endpoint)
     if endpoint_ok:
@@ -394,17 +405,20 @@ def _run_preflight_checks(
     else:
         errors.append(endpoint_message)
 
-    if not settings.azure_ai_foundry_model_deployment_name:
+    if needs_model_inference and not settings.azure_ai_foundry_model_deployment_name:
         errors.append("AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME is empty")
 
     if not any(callable(method) for method in (create_or_update, create_agent, create_version)):
         errors.append("No supported agent provisioning method available in current SDK")
 
-    probe_ok, probe_message = _preflight_chat_probe(client, settings.azure_ai_foundry_model_deployment_name)
-    if probe_ok:
-        print(f"[preflight] {probe_message}")
+    if needs_model_inference:
+        probe_ok, probe_message = _preflight_chat_probe(client, settings.azure_ai_foundry_model_deployment_name)
+        if probe_ok:
+            print(f"[preflight] {probe_message}")
+        else:
+            errors.append(probe_message)
     else:
-        errors.append(probe_message)
+        print(f"[preflight] Skipping inference probe (action='{action}' does not require model deployment)")
 
     list_ok, list_message = _preflight_agents_list_probe(agents_api)
     if list_ok:
@@ -412,16 +426,19 @@ def _run_preflight_checks(
     else:
         errors.append(list_message)
 
-    version_probe_ok, version_probe_message = _preflight_create_version_probe(
-        create_version=create_version,
-        delete_version=delete_version,
-        delete_agent=delete_agent,
-        model_name=settings.azure_ai_foundry_model_deployment_name,
-    )
-    if version_probe_ok:
-        print(f"[preflight] {version_probe_message}")
+    if needs_model_inference:
+        version_probe_ok, version_probe_message = _preflight_create_version_probe(
+            create_version=create_version,
+            delete_version=delete_version,
+            delete_agent=delete_agent,
+            model_name=settings.azure_ai_foundry_model_deployment_name,
+        )
+        if version_probe_ok:
+            print(f"[preflight] {version_probe_message}")
+        else:
+            errors.append(version_probe_message)
     else:
-        errors.append(version_probe_message)
+        print(f"[preflight] Skipping create_version probe (action='{action}')")
 
     return len(errors) == 0, errors
 
@@ -619,6 +636,7 @@ def main() -> int:
         create_version=create_version,
         delete_version=delete_version,
         delete_agent=delete_agent,
+        action=args.action,
     )
     if not preflight_ok:
         print("[preflight] Validation failed:")
