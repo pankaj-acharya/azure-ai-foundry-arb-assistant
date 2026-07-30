@@ -163,9 +163,9 @@ jobs:
         run: python scripts/deploy_foundry_agents.py --strict --action ${{ env.AGENT_ACTION }}
 
       - name: Run one-agent smoke deployment check
-        if: ${{ env.RUN_SINGLE_AGENT_SMOKE == 'true' || env.RUN_SINGLE_AGENT_SMOKE == 'TRUE' || env.RUN_SINGLE_AGENT_SMOKE == 'True' }}
+        if: ${{ (env.RUN_SINGLE_AGENT_SMOKE == 'true' || env.RUN_SINGLE_AGENT_SMOKE == 'TRUE' || env.RUN_SINGLE_AGENT_SMOKE == 'True') && (env.AGENT_ACTION == 'deploy' || env.AGENT_ACTION == '') }}
         run: python scripts/smoke_test_single_agent.py
 
       - name: Run multi-agent smoke deployment check
-        if: ${{ env.RUN_MULTI_AGENT_SMOKE == 'true' || env.RUN_MULTI_AGENT_SMOKE == 'TRUE' || env.RUN_MULTI_AGENT_SMOKE == 'True' }}
+        if: ${{ (env.RUN_MULTI_AGENT_SMOKE == 'true' || env.RUN_MULTI_AGENT_SMOKE == 'TRUE' || env.RUN_MULTI_AGENT_SMOKE == 'True') && (env.AGENT_ACTION == 'deploy' || env.AGENT_ACTION == '') }}
         run: python scripts/smoke_test.py
