@@ -37,6 +37,21 @@ on:
         options:
           - "false"
           - "true"
+      org_name:
+        description: "Organisation name (required for Anthropic/Claude model deployments)"
+        required: false
+        default: "MyOrganisation"
+        type: string
+      country_code:
+        description: "2-letter ISO country code (required for Anthropic/Claude model deployments)"
+        required: false
+        default: "US"
+        type: string
+      industry:
+        description: "Industry sector (required for Anthropic/Claude model deployments)"
+        required: false
+        default: "Technology"
+        type: string
 
 permissions:
   id-token: write
@@ -81,6 +96,10 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy model endpoint
+        env:
+          AZURE_ORG_NAME: ${{ inputs.org_name }}
+          AZURE_ORG_COUNTRY_CODE: ${{ inputs.country_code }}
+          AZURE_ORG_INDUSTRY: ${{ inputs.industry }}
         run: |
           ENDPOINT_ARG=""
           if [[ -n "${{ inputs.endpoint_name }}" ]]; then

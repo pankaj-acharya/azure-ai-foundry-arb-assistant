@@ -110,6 +110,19 @@ def _create_deployment(
             }
         },
     }
+    # Anthropic model deployments require ModelProviderData with org details.
+    if model_info["format"] == "Anthropic":
+        body["properties"]["modelProviderData"] = {
+            "organizationName": os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip(),
+            "countryCode": os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip(),
+            "industry": os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip(),
+        }
+        print(
+            f"[deploy-model] Including ModelProviderData: "
+            f"org={body['properties']['modelProviderData']['organizationName']}, "
+            f"country={body['properties']['modelProviderData']['countryCode']}, "
+            f"industry={body['properties']['modelProviderData']['industry']}"
+        )
     result = _az_rest("PUT", url, body)
     if result.returncode != 0:
         print(f"[deploy-model] Failed to create deployment:\n{(result.stderr or result.stdout).strip()}")
