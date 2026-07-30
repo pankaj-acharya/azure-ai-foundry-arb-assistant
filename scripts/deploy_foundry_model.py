@@ -29,9 +29,11 @@ SUPPORTED_MODELS: dict[str, dict[str, str]] = {
     "gpt-4o":            {"name": "gpt-4o",           "format": "OpenAI"},
     "gpt-4.1":           {"name": "gpt-4.1",          "format": "OpenAI"},
     "gpt-4.1-mini":      {"name": "gpt-4.1-mini",     "format": "OpenAI"},
-    "claude-opus-4.5":   {"name": "claude-opus-4-5",  "format": "Anthropic"},
+    # Anthropic — names must match az cognitiveservices account list-models output exactly
+    "claude-haiku-4.5":  {"name": "claude-haiku-4-5", "format": "Anthropic"},
+    "claude-opus-4.8":   {"name": "claude-opus-4-8",  "format": "Anthropic"},
+    "claude-sonnet-5":   {"name": "claude-sonnet-5",  "format": "Anthropic"},
     "claude-opus-5":     {"name": "claude-opus-5",    "format": "Anthropic"},
-    "claude-sonnet-4.5": {"name": "claude-sonnet-4-5","format": "Anthropic"},
 }
 
 MGMT_API_VERSION = "2025-04-01-preview"

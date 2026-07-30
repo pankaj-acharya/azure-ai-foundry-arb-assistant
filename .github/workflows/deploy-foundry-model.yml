@@ -24,9 +24,10 @@ on:
           - gpt-4o
           - gpt-4.1
           - gpt-4.1-mini
-          - claude-opus-4.5
+          - claude-haiku-4.5
+          - claude-opus-4.8
+          - claude-sonnet-5
           - claude-opus-5
-          - claude-sonnet-4.5
       endpoint_name:
         description: "Custom endpoint name (leave blank for auto-generated)"
         required: false
