@@ -1,7 +1,8 @@
 """Deploy a model in Azure AI Foundry (new-style Account-based project).
 
-Uses `az cognitiveservices account deployment create` (official CLI) which
-correctly handles provider-specific schema requirements for Anthropic/OpenAI.
+Uses `az cognitiveservices account deployment create` for OpenAI models.
+Anthropic models use direct ARM REST API (az rest) because the runner's CLI
+may not have the --model-provider-data flag available.
 Account name is parsed automatically from AZURE_AI_FOUNDRY_PROJECT_ENDPOINT.
 """
 
@@ -168,6 +169,93 @@ def _get_available_model_version(
         return None
 
 
+def _create_anthropic_via_rest(
+    subscription_id: str, resource_group: str, account_name: str,
+    deployment_name: str, model_info: dict[str, str],
+    model_version: str, sku_name: str,
+) -> bool:
+    """Create an Anthropic deployment via az rest (bypasses CLI --model-provider-data flag).
+
+    The GitHub Actions runner's Azure CLI may not support --model-provider-data.
+    We construct the ARM PUT body ourselves, trying multiple schema variants across
+    API versions until one succeeds.
+    """
+    org_name = os.getenv("AZURE_ORG_NAME", "MyOrganisation").strip()
+    country_code = os.getenv("AZURE_ORG_COUNTRY_CODE", "US").strip()
+    industry = os.getenv("AZURE_ORG_INDUSTRY", "Technology").strip()
+
+    print(f"[deploy-model] Anthropic REST deploy: org={org_name} country={country_code} industry={industry}")
+
+    base_url = (
+        f"https://management.azure.com/subscriptions/{subscription_id}"
+        f"/resourceGroups/{resource_group}"
+        f"/providers/Microsoft.CognitiveServices/accounts/{account_name}"
+        f"/deployments/{deployment_name}"
+    )
+
+    provider_data = {
+        "organizationName": org_name,
+        "countryCode": country_code,
+        "industry": industry,
+    }
+    model_block = {
+        "format": model_info["format"],
+        "name": model_info["name"],
+        "version": model_version,
+    }
+    sku_block = {"name": sku_name, "capacity": 1}
+
+    # Try different API versions and body schemas — newest stable API first.
+    # Each entry: (api_version, variant_label, body_dict)
+    attempts = [
+        ("2026-05-01", "root-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block},
+            "modelProviderData": provider_data,
+        }),
+        ("2026-03-01", "root-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block},
+            "modelProviderData": provider_data,
+        }),
+        ("2026-05-01", "props-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block, "modelProviderData": provider_data},
+        }),
+        ("2026-03-01", "props-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block, "modelProviderData": provider_data},
+        }),
+        ("2025-04-01-preview", "props-string", {
+            "sku": sku_block,
+            "properties": {"model": model_block, "modelProviderData": json.dumps(provider_data)},
+        }),
+    ]
+
+    for api_version, variant, body in attempts:
+        url = f"{base_url}?api-version={api_version}"
+        body_json = json.dumps(body)
+        print(f"[deploy-model] az rest PUT api={api_version} schema={variant}...")
+        result = subprocess.run(
+            ["az", "rest", "--method", "PUT", "--url", url,
+             "--body", body_json, "--headers", "Content-Type=application/json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            resp = result.stdout.strip()
+            print(f"[deploy-model] REST PUT succeeded (api={api_version} schema={variant})")
+            if resp:
+                print(f"[deploy-model] Response: {resp[:300]}")
+            return True
+        stderr = result.stderr.strip()
+        print(f"[deploy-model] REST PUT failed (api={api_version} schema={variant}): {stderr[:300]}")
+        # Wrong API version — skip remaining variants for this version
+        if "NoRegisteredProviderFound" in stderr or "could not find api-version" in stderr.lower():
+            continue
+
+    return False
+
+
 def _create_via_cli(
     subscription_id: str, resource_group: str, account_name: str,
     deployment_name: str, model_info: dict[str, str],
@@ -280,9 +368,19 @@ def main() -> int:
             return 1
         model_version, sku_name = version_info
         print(f"[deploy-model] Creating deployment '{deployment_name}' (version: {model_version}, sku: {sku_name})...")
-        if not _create_via_cli(
-            subscription_id, resource_group, account_name, deployment_name, model_info, model_version, sku_name
-        ):
+        # Anthropic models require modelProviderData — the runner's CLI may not support
+        # the --model-provider-data flag, so we use direct ARM REST for Anthropic.
+        if model_info["format"] == "Anthropic":
+            ok = _create_anthropic_via_rest(
+                subscription_id, resource_group, account_name, deployment_name,
+                model_info, model_version, sku_name,
+            )
+        else:
+            ok = _create_via_cli(
+                subscription_id, resource_group, account_name, deployment_name,
+                model_info, model_version, sku_name,
+            )
+        if not ok:
             return 1
         print(f"[deploy-model] Create request submitted.")
 
