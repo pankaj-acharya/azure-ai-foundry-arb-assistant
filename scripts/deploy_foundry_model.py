@@ -205,9 +205,18 @@ def _create_anthropic_via_rest(
     }
     sku_block = {"name": sku_name, "capacity": 1}
 
-    # Try different API versions and body schemas — newest stable API first.
+    # Try different API versions and body schemas — known-working variant first.
     # Each entry: (api_version, variant_label, body_dict)
     attempts = [
+        # ✅ Confirmed working: 2026-05-01 with modelProviderData inside properties
+        ("2026-05-01", "props-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block, "modelProviderData": provider_data},
+        }),
+        ("2026-03-01", "props-object", {
+            "sku": sku_block,
+            "properties": {"model": model_block, "modelProviderData": provider_data},
+        }),
         ("2026-05-01", "root-object", {
             "sku": sku_block,
             "properties": {"model": model_block},
@@ -217,14 +226,6 @@ def _create_anthropic_via_rest(
             "sku": sku_block,
             "properties": {"model": model_block},
             "modelProviderData": provider_data,
-        }),
-        ("2026-05-01", "props-object", {
-            "sku": sku_block,
-            "properties": {"model": model_block, "modelProviderData": provider_data},
-        }),
-        ("2026-03-01", "props-object", {
-            "sku": sku_block,
-            "properties": {"model": model_block, "modelProviderData": provider_data},
         }),
         ("2025-04-01-preview", "props-string", {
             "sku": sku_block,
