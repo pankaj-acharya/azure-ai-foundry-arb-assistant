@@ -6,8 +6,8 @@ Run locally with:
 
 or via the Foundry hosted-agent tooling (``azd ai agent run`` /
 ``azd ai agent invoke``) once deployed as a Foundry hosted agent. Requires
-``AZURE_AI_PROJECT_ENDPOINT`` to be set to the Foundry project endpoint whose
-agents were deployed by ``.github/workflows/deploy-foundry-agents.yml``.
+``AZURE_AI_FOUNDRY_PROJECT_ENDPOINT`` to be set to the Foundry project endpoint
+whose agents were deployed by ``.github/workflows/deploy-foundry-agents.yml``.
 """
 
 from __future__ import annotations

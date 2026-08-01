@@ -78,10 +78,15 @@ class ReviewInput:
 
 
 def _project_endpoint() -> str:
-    endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT") or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
+    endpoint = (
+        os.environ.get("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
+        or os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
+        or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
+    )
     if not endpoint:
         raise RuntimeError(
-            "AZURE_AI_PROJECT_ENDPOINT (or FOUNDRY_PROJECT_ENDPOINT) must be set to build the ARB workflow."
+            "AZURE_AI_FOUNDRY_PROJECT_ENDPOINT must be set to build the ARB workflow "
+            "(AZURE_AI_PROJECT_ENDPOINT / FOUNDRY_PROJECT_ENDPOINT are also accepted as fallbacks)."
         )
     return endpoint
 
