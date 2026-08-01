@@ -7,3 +7,10 @@ beautifulsoup4
 pydantic
 rich
 pytest
+
+# Agent Framework hosted workflow (replacement for the retiring Foundry
+# portal "Workflows" preview feature -- see src/agent_framework_workflow.py)
+--pre
+agent-framework>=1.13.0
+agent-framework-foundry>=1.10.4
+agent-framework-foundry-hosting>=1.0.0b260730

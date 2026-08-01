@@ -307,6 +307,63 @@ It invokes deployed specialist agents in parallel, then calls the summarizer age
 
 When done learning, delete or stop Azure resources that are no longer needed to avoid ongoing costs.
 
+## Agent Framework hosted workflow (portal Workflows replacement)
+
+Azure AI Foundry's portal **Workflows** tab (the visual, drag-and-drop workflow builder)
+is a **public preview feature that Microsoft is retiring on December 1, 2026**, and it
+does not support hosted/persistent agents as workflow nodes. Because this project's ARB
+review is orchestrated by persistent Foundry agents, it cannot be represented as a portal
+Workflow long-term.
+
+Instead, `src/agent_framework_workflow.py` ports the same orchestration logic to a
+[Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/) `Workflow` graph
+— the framework Microsoft recommends as the supported, code-first successor to portal
+Workflows. It builds the same fan-out/fan-in shape as
+`scripts/orchestrate_persistent_agents.py`:
+
+```mermaid
+flowchart TD
+    A[dispatch-input] --> S1[architecture-agent]
+    A --> S2[security-agent]
+    A --> S3[cost-agent]
+    A --> S4[resiliency-agent]
+    S1 --> AG[aggregate-specialist-outputs]
+    S2 --> AG
+    S3 --> AG
+    S4 --> AG
+    AG --> SUM[arb-summarizer-agent]
+```
+
+Each node wraps the **same persistent Foundry agents** deployed by
+`deploy-foundry-agents.yml` (looked up by name via `FoundryAgent`), so agent
+instructions stay single-sourced in `src/agent_prompts.py` and the Azure portal — only
+the orchestration graph is re-implemented.
+
+### Running it locally
+
+```bash
+pip install -r requirements.txt   # installs agent-framework, agent-framework-foundry,
+                                   # agent-framework-foundry-hosting (prerelease packages)
+export AZURE_AI_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<project-name>"
+az login
+python -m src.hosted_arb_workflow
+```
+
+This starts a local OpenAI-Responses-compatible host (`ResponsesHostServer`) on port
+`8088` by default. Send a page/design description as the request text; the host runs
+the same parallel-specialist → summarizer graph and returns the consolidated report.
+
+### Deploying as a Foundry hosted agent
+
+Follow the Foundry hosted-agent deployment flow (`azd ai agent init` /
+`azd provision` / `azd deploy` / `azd ai agent invoke`) with `src/hosted_arb_workflow.py`
+as the entrypoint. Because it is a **hosted agent**, not a portal Workflow, it will not
+appear under the Foundry portal's **Workflows** tab — it appears under **Agents** like
+the existing specialist/summarizer agents, and is invoked directly (e.g. via
+`azd ai agent invoke` or the OpenAI Responses API) rather than run through the portal
+workflow UI.
+
+
 ## Future enhancements (optional, not implemented in v1)
 
 - Azure AI Search for RAG
