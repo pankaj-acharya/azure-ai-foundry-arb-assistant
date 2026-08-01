@@ -73,7 +73,7 @@ def _invoke_persistent_agent(
             payload: dict[str, Any] = {
                 "conversation": conversation.id,
                 "max_output_tokens": max_output_tokens,
-                "reasoning": {"effort": "minimal"},
+                "reasoning": {"effort": "low"},
             }
             try:
                 response = openai_client.responses.create(**payload)

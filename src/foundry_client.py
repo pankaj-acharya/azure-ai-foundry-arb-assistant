@@ -153,7 +153,7 @@ class FoundryModelClient:
             "model": deployment,
             "instructions": system_prompt,
             "input": "\n\n".join(user_prompts).strip(),
-            "reasoning": {"effort": "minimal"},
+            "reasoning": {"effort": "low"},
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
