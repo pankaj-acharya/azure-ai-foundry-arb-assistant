@@ -17,13 +17,13 @@ from .web_loader import WebPageContent
 
 
 class ARBOrchestrator:
-    """Coordinates specialist agents and a chairperson summarization agent."""
+    """Coordinates specialist agents and a summarizer agent."""
 
     def __init__(self, model_client):
         self.model_client = model_client
 
     def run_review(self, page: WebPageContent) -> dict:
-        """Run specialist reviews in parallel and consolidate them with the chairperson agent."""
+        """Run specialist reviews in parallel and consolidate them with the summarizer agent."""
 
         specialist_input = build_specialist_user_prompt(page.title, page.url, page.text)
 

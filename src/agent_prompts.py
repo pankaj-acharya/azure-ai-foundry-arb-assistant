@@ -1,4 +1,4 @@
-"""Prompt templates for specialist and chairperson agents."""
+"""Prompt templates for specialist and summarizer agents."""
 
 ARCHITECTURE_AGENT_PROMPT = """
 You are the Architecture Agent in an Azure Architecture Review Board.
@@ -70,7 +70,7 @@ Return:
 
 
 ARB_CHAIRPERSON_PROMPT = """
-You are the ARB Chairperson Agent.
+You are the ARB Summarizer Agent.
 You receive specialist reviews from Architecture, Security, Cost, and Resiliency agents.
 
 Consolidate into a final markdown report with these sections:
@@ -88,7 +88,7 @@ ARCHITECTURE_AGENT_NAME = "architecture-agent"
 SECURITY_AGENT_NAME = "security-agent"
 COST_AGENT_NAME = "cost-agent"
 RESILIENCY_AGENT_NAME = "resiliency-agent"
-ARB_CHAIRPERSON_AGENT_NAME = "arb-chairperson-agent"
+ARB_CHAIRPERSON_AGENT_NAME = "arb-summarizer-agent"
 
 SPECIALIST_AGENT_PROMPTS: dict[str, str] = {
     ARCHITECTURE_AGENT_NAME: ARCHITECTURE_AGENT_PROMPT,
@@ -116,7 +116,7 @@ def build_specialist_user_prompt(page_title: str, page_url: str, page_text: str)
 
 
 def build_chairperson_user_prompt(page_title: str, page_url: str, specialist_outputs: dict[str, str]) -> str:
-    """Build the chairperson consolidation prompt from specialist outputs."""
+    """Build the summarizer consolidation prompt from specialist outputs."""
 
     return (
         "Consolidate the specialist reviews below into the requested ARB final report format.\n\n"

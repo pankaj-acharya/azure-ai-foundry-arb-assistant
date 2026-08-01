@@ -9,7 +9,7 @@ from src.web_loader import WebPageContent
 class FakeModelClient:
     def invoke_model(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
         prompt_l = system_prompt.lower()
-        if "arb chairperson" in prompt_l:
+        if "arb summarizer" in prompt_l:
             return (
                 "## Executive summary\n"
                 "Good learning architecture.\n\n"

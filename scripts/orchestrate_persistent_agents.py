@@ -167,7 +167,7 @@ def main() -> int:
                 max_output_tokens=1800,
             )
         except RuntimeError as exc:
-            print(f"[persistent-orchestration] Warning: chairperson fallback to model deployment: {exc}")
+            print(f"[persistent-orchestration] Warning: summarizer fallback to model deployment: {exc}")
             final_report = fallback_model_client.invoke_model(
                 system_prompt=ARB_CHAIRPERSON_PROMPT,
                 user_prompt=chairperson_input,

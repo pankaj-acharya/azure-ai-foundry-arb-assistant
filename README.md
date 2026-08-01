@@ -2,7 +2,7 @@
 
 Beginner-friendly Azure AI Foundry multi-agent learning project.
 
-This project reviews a public blog page (or any public URL) using specialist agents and then consolidates results through an ARB Chairperson agent.
+This project reviews a public blog page (or any public URL) using specialist agents and then consolidates results through an ARB Summarizer Agent.
 
 ## What this project does
 
@@ -13,7 +13,7 @@ This project reviews a public blog page (or any public URL) using specialist age
   - Security Agent
   - Cost Agent
   - Resiliency Agent
-- Runs an ARB Chairperson Agent to consolidate specialist feedback
+- Runs an ARB Summarizer Agent to consolidate specialist feedback
 - Writes a markdown report to `outputs/arb-review.md`
 
 ## Architecture diagram
@@ -25,7 +25,7 @@ flowchart TD
     B --> C2[Security Agent]
     B --> C3[Cost Agent]
     B --> C4[Resiliency Agent]
-    C1 --> D[ARB Chairperson Agent]
+    C1 --> D[ARB Summarizer Agent]
     C2 --> D
     C3 --> D
     C4 --> D
@@ -42,7 +42,7 @@ flowchart TD
   - Reviews expensive SKUs, over-engineering, always-on resources, right-sized starter options, personal/lab subscription risks
 - Resiliency Agent
   - Reviews HA/DR assumptions, regional failure posture, retry/timeout handling, observability readiness
-- ARB Chairperson Agent
+- ARB Summarizer Agent
   - Produces final decision-oriented report:
     - Executive summary
     - Strengths
@@ -235,7 +235,7 @@ flowchart LR
         E --> E2[Security agent]
         E --> E3[Cost agent]
         E --> E4[Resiliency agent]
-        E1 --> F[ARB Chairperson agent]
+        E1 --> F[ARB Summarizer Agent]
         E2 --> F
         E3 --> F
         E4 --> F
@@ -301,7 +301,7 @@ New persistent orchestration script:
 python scripts/orchestrate_persistent_agents.py
 ```
 
-It invokes deployed specialist agents in parallel, then calls the chairperson agent for final consolidation and writes `outputs/arb-review.md`.
+It invokes deployed specialist agents in parallel, then calls the summarizer agent for final consolidation and writes `outputs/arb-review.md`.
 
 ## Cleanup reminder
 
