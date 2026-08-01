@@ -8,3 +8,8 @@ htmlcov/
 outputs/
 *.pyc
 *.egg-info/
+.azure
+.checkpoints/
+build/
+.venv-scripts/
+.venv-agent-framework/
