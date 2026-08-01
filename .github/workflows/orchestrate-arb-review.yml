@@ -1,4 +1,5 @@
 name: Orchestrate ARB Review
+# Triggers all 4 specialist agents in parallel, then runs the summarizer agent to produce a final report.
 
 on:
   workflow_dispatch:
