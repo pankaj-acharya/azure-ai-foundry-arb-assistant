@@ -36,6 +36,7 @@ from agent_framework import (
     Workflow,
     WorkflowAgent,
     WorkflowBuilder,
+    WorkflowContext,
 )
 from agent_framework.foundry import FoundryAgent
 from azure.core.credentials import TokenCredential
@@ -111,11 +112,17 @@ def build_arb_workflow(
     # rebuild the summarizer prompt with the original page title/url.
     _run_state: dict[str, ReviewInput] = {}
 
-    def _dispatch_input(messages: list[Message]) -> AgentExecutorRequest:
+    async def _dispatch_input(messages: list[Message], ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         """Fan-out entry point: turn the caller's raw input (the hosted-agent
         conversation input -- e.g. pasted design/page content) into the
         shared specialist prompt sent to all 4 specialist agents in
-        parallel."""
+        parallel.
+
+        Must explicitly forward the request via ``ctx.send_message`` --
+        Agent Framework's ``FunctionExecutor`` does NOT auto-forward a plain
+        return value to downstream fan-out/fan-in edges; a bare ``return``
+        here is silently discarded by the workflow runtime.
+        """
 
         page_text = "\n".join(message.text for message in messages if message.text)
         review_input = ReviewInput(
@@ -125,11 +132,17 @@ def build_arb_workflow(
         )
         _run_state["current"] = review_input
         prompt = build_specialist_user_prompt(review_input.page_title, review_input.page_url, review_input.page_text)
-        return AgentExecutorRequest(messages=[Message(role="user", contents=[prompt])])
+        await ctx.send_message(AgentExecutorRequest(messages=[Message(role="user", contents=[prompt])]))
 
-    def _aggregate_specialist_outputs(responses: list[AgentExecutorResponse]) -> AgentExecutorRequest:
+    async def _aggregate_specialist_outputs(
+        responses: list[AgentExecutorResponse], ctx: WorkflowContext[AgentExecutorRequest]
+    ) -> None:
         """Fan-in point: combine the 4 specialist outputs into the
-        summarizer's consolidation prompt, keyed by agent name."""
+        summarizer's consolidation prompt, keyed by agent name.
+
+        See ``_dispatch_input`` docstring -- must use ``ctx.send_message``
+        instead of ``return`` to actually forward to the summarizer.
+        """
 
         review_input = _run_state["current"]
         outputs_by_key: dict[str, str] = {}
@@ -138,7 +151,7 @@ def build_arb_workflow(
             outputs_by_key[key] = response.agent_response.text
 
         prompt = build_chairperson_user_prompt(review_input.page_title, review_input.page_url, outputs_by_key)
-        return AgentExecutorRequest(messages=[Message(role="user", contents=[prompt])])
+        await ctx.send_message(AgentExecutorRequest(messages=[Message(role="user", contents=[prompt])]))
 
     dispatcher = FunctionExecutor(_dispatch_input, id="dispatch-input")
     aggregator = FunctionExecutor(_aggregate_specialist_outputs, id="aggregate-specialist-outputs")

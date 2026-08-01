@@ -1,15 +1,14 @@
+# Dependencies for the Agent Framework hosted workflow
+# (src/agent_framework_workflow.py, src/hosted_arb_workflow.py) -- the
+# replacement for the retiring Foundry portal "Workflows" preview feature.
+#
+# This file is deliberately separate from requirements-scripts.txt: it must
+# NOT contain azure-ai-projects>=2.4.0, because agent-framework-foundry pins
+# azure-ai-projects<2.4.0 and pip cannot satisfy both constraints in the same
+# environment. `azd ai agent run` / `azd deploy` auto-install this file (the
+# root requirements.txt) for the hosted agent service, so keep it scoped to
+# only what the hosted workflow actually imports.
 azure-identity
-azure-ai-projects>=2.4.0,<3.0.0
-openai>=2.49.0,<3.0.0
-python-dotenv
-requests
-beautifulsoup4
-pydantic
-rich
-pytest
-
-# Agent Framework hosted workflow (replacement for the retiring Foundry
-# portal "Workflows" preview feature -- see src/agent_framework_workflow.py)
 --pre
 agent-framework>=1.13.0
 agent-framework-foundry>=1.10.4

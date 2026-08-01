@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: pankaj-acharya-congenial-happiness
+services:
+    arb-review-workflow-agent:
+        project: .
+        host: azure.ai.agent
+        language: python
+        uses:
+            - proj_foundry_labs
+        codeConfiguration:
+            dependencyResolution: remote_build
+            entryPoint: src/hosted_arb_workflow.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        environmentVariables:
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+        kind: hosted
+        name: arb-review-workflow-agent
+        protocols:
+            - protocol: responses
+              version: 2.0.0
+    proj_foundry_labs:
+        host: azure.ai.project
+        endpoint: https://ArchReviewAssistant.services.ai.azure.com/api/projects/proj_foundry_labs
+infra:
+    provider: microsoft.foundry

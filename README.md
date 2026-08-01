@@ -91,7 +91,7 @@ Windows PowerShell:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-scripts.txt
 Copy-Item .env.example .env
 az login
 python -m src.main
@@ -102,7 +102,7 @@ Linux/macOS shell:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-scripts.txt
 cp .env.example .env
 az login
 python -m src.main
@@ -349,6 +349,14 @@ az login
 python -m src.hosted_arb_workflow
 ```
 
+> **Note:** `requirements.txt` (this file) is intentionally separate from
+> [`requirements-scripts.txt`](requirements-scripts.txt) (used by
+> `scripts/orchestrate_persistent_agents.py` and the CI workflows). `agent-framework-foundry`
+> pins `azure-ai-projects<2.4.0`, which conflicts with `requirements-scripts.txt`'s
+> `azure-ai-projects>=2.4.0` (needed for the v2 responses API in `src/foundry_client.py`).
+> Installing them in the same Python environment is not possible — keep them in separate
+> venvs/environments.
+
 This starts a local OpenAI-Responses-compatible host (`ResponsesHostServer`) on port
 `8088` by default. Send a page/design description as the request text; the host runs
 the same parallel-specialist → summarizer graph and returns the consolidated report:
@@ -361,23 +369,32 @@ curl -s http://localhost:8088/responses \
 
 ### Deploying as a Foundry hosted agent
 
-Follow the Foundry hosted-agent deployment flow with `src/hosted_arb_workflow.py` as
-the entrypoint. Always prefix `azd` commands with `AZURE_DEV_USER_AGENT=microsoft_foundry_skill`
-(inline only — never persist it into `azd env set`, `.env`, or `azure.yaml`):
+Deployed via `azd ai agent` tooling. `azure.yaml` (already in this repo) targets the
+existing Foundry project and reuses the `gpt-5-4` model deployment — no new infra or
+paid model deployment needed. Always prefix `azd` commands with
+`AZURE_DEV_USER_AGENT=microsoft_foundry_skill` (inline only — never persist it into
+`azd env set`, `.env`, or `azure.yaml`):
 
-1. **Scaffold** (one-time — generates `azure.yaml` + Dockerfile for this service; no
-   `azure.yaml` exists in this repo yet):
+1. **Scaffold** (already done — `azure.yaml` has an `arb-review-workflow-agent` service
+   entry with `host: azure.ai.agent`). To redo it from scratch on a fresh clone:
    ```bash
-   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent init
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent init --no-prompt \
+     --src . --agent-name arb-review-workflow-agent \
+     --project-id "<existing-Foundry-project-ARM-id>" \
+     --deploy-mode code --runtime python_3_13 \
+     --entry-point src/hosted_arb_workflow.py --model-deployment gpt-5-4
    ```
-   Point it at `src/hosted_arb_workflow.py` as the entrypoint when prompted.
-2. **Provision** the Foundry project/infra (skip if already provisioned):
+2. **Provision** (already done — reuses the existing project, no new resources created):
    ```bash
    AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
    ```
-3. **Local smoke test** via azd (runs the container locally against the connected project):
+3. **Local smoke test** via azd (installs `requirements.txt` into its own venv and runs
+   the container locally against the connected project). Auto-detection of the start
+   command can fail for this repo's layout (a shared `src/` package, not
+   `src/<agent-name>/`), so pass `--start-command` explicitly:
    ```bash
-   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent run --no-client
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent run --no-client \
+     --start-command "python -m src.hosted_arb_workflow"
    ```
 4. **Deploy** the hosted agent container to the Foundry Agent Service:
    ```bash
