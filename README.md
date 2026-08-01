@@ -344,24 +344,54 @@ the orchestration graph is re-implemented.
 ```bash
 pip install -r requirements.txt   # installs agent-framework, agent-framework-foundry,
                                    # agent-framework-foundry-hosting (prerelease packages)
-export AZURE_AI_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<project-name>"
+export AZURE_AI_FOUNDRY_PROJECT_ENDPOINT="https://<account>.services.ai.azure.com/api/projects/<project-name>"
 az login
 python -m src.hosted_arb_workflow
 ```
 
 This starts a local OpenAI-Responses-compatible host (`ResponsesHostServer`) on port
 `8088` by default. Send a page/design description as the request text; the host runs
-the same parallel-specialist → summarizer graph and returns the consolidated report.
+the same parallel-specialist → summarizer graph and returns the consolidated report:
+
+```bash
+curl -s http://localhost:8088/responses \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Review this design: <paste page/design text>"}'
+```
 
 ### Deploying as a Foundry hosted agent
 
-Follow the Foundry hosted-agent deployment flow (`azd ai agent init` /
-`azd provision` / `azd deploy` / `azd ai agent invoke`) with `src/hosted_arb_workflow.py`
-as the entrypoint. Because it is a **hosted agent**, not a portal Workflow, it will not
-appear under the Foundry portal's **Workflows** tab — it appears under **Agents** like
-the existing specialist/summarizer agents, and is invoked directly (e.g. via
-`azd ai agent invoke` or the OpenAI Responses API) rather than run through the portal
-workflow UI.
+Follow the Foundry hosted-agent deployment flow with `src/hosted_arb_workflow.py` as
+the entrypoint. Always prefix `azd` commands with `AZURE_DEV_USER_AGENT=microsoft_foundry_skill`
+(inline only — never persist it into `azd env set`, `.env`, or `azure.yaml`):
+
+1. **Scaffold** (one-time — generates `azure.yaml` + Dockerfile for this service; no
+   `azure.yaml` exists in this repo yet):
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent init
+   ```
+   Point it at `src/hosted_arb_workflow.py` as the entrypoint when prompted.
+2. **Provision** the Foundry project/infra (skip if already provisioned):
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
+   ```
+3. **Local smoke test** via azd (runs the container locally against the connected project):
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent run --no-client
+   ```
+4. **Deploy** the hosted agent container to the Foundry Agent Service:
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd deploy
+   ```
+5. **Invoke** the deployed hosted agent to confirm it responds:
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent invoke
+   ```
+
+Because it is a **hosted agent**, not a portal Workflow, it will not appear under the
+Foundry portal's **Workflows** tab — it appears under **Agents** like the existing
+specialist/summarizer agents, and is invoked directly (`azd ai agent invoke` or the
+OpenAI Responses API) rather than run through the portal workflow UI.
 
 
 ## Future enhancements (optional, not implemented in v1)

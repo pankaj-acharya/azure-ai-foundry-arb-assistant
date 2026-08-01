@@ -7,7 +7,6 @@ parallel specialists -> 1 aggregator -> 1 summarizer.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,17 +23,31 @@ FAKE_ENDPOINT = "https://example-project.services.ai.azure.com/api/projects/exam
 
 @pytest.fixture(autouse=True)
 def _clear_endpoint_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", raising=False)
     monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
     monkeypatch.delenv("FOUNDRY_PROJECT_ENDPOINT", raising=False)
 
 
 def test_build_arb_workflow_requires_project_endpoint() -> None:
-    with pytest.raises(RuntimeError, match="AZURE_AI_PROJECT_ENDPOINT"):
+    with pytest.raises(RuntimeError, match="AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"):
         build_arb_workflow(credential=MagicMock())
 
 
-def test_build_arb_workflow_reads_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_arb_workflow_reads_endpoint_from_primary_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AZURE_AI_FOUNDRY_PROJECT_ENDPOINT matches the existing repo secret/.env.example/config.py."""
+
+    monkeypatch.setenv("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT", FAKE_ENDPOINT)
+    workflow = build_arb_workflow(credential=MagicMock())
+    assert workflow.name == "arb-review-workflow"
+
+
+def test_build_arb_workflow_reads_endpoint_from_fallback_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_AI_PROJECT_ENDPOINT", FAKE_ENDPOINT)
+    workflow = build_arb_workflow(credential=MagicMock())
+    assert workflow.name == "arb-review-workflow"
+
+    monkeypatch.delenv("AZURE_AI_PROJECT_ENDPOINT", raising=False)
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", FAKE_ENDPOINT)
     workflow = build_arb_workflow(credential=MagicMock())
     assert workflow.name == "arb-review-workflow"
 
