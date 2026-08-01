@@ -131,14 +131,11 @@ jobs:
           fi
           # Normalize dots to hyphens — Azure deployment names use hyphens (e.g. gpt-5-4 not gpt-5.4)
           MODEL_NAME="${MODEL_NAME//./-}"
-          cat > .env << EOF
-AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
-AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${MODEL_NAME}
-BLOG_URL=${{ github.event_name == 'workflow_call' && inputs.blog_url || vars.BLOG_URL }}
-MAX_INPUT_CHARS=${{ github.event_name == 'workflow_call' && inputs.max_input_chars || vars.MAX_INPUT_CHARS }}
-OUTPUT_FOLDER=outputs
-LOG_LEVEL=INFO
-EOF
+          printf 'AZURE_RESOURCE_GROUP=%s\n' "${{ vars.AZURE_RESOURCE_GROUP }}" > .env
+          printf 'AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=%s\n' "${MODEL_NAME}" >> .env
+          printf 'BLOG_URL=%s\n' "${{ github.event_name == 'workflow_call' && inputs.blog_url || vars.BLOG_URL }}" >> .env
+          printf 'MAX_INPUT_CHARS=%s\n' "${{ github.event_name == 'workflow_call' && inputs.max_input_chars || vars.MAX_INPUT_CHARS }}" >> .env
+          printf 'OUTPUT_FOLDER=outputs\nLOG_LEVEL=INFO\n' >> .env
 
       - name: Run unit tests
         run: python -m pytest

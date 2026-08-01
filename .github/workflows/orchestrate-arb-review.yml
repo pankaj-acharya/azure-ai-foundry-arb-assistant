@@ -87,14 +87,11 @@ jobs:
           MODEL_NAME="${{ inputs.model_deployment_name }}"
           # Normalize dots to hyphens — Azure deployment names use hyphens (e.g. gpt-5-4 not gpt-5.4)
           MODEL_NAME="${MODEL_NAME//./-}"
-          cat > .env << EOF
-AZURE_RESOURCE_GROUP=${{ vars.AZURE_RESOURCE_GROUP }}
-AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=${MODEL_NAME}
-BLOG_URL=${{ inputs.blog_url }}
-MAX_INPUT_CHARS=${{ inputs.max_input_chars }}
-OUTPUT_FOLDER=outputs
-LOG_LEVEL=INFO
-EOF
+          printf 'AZURE_RESOURCE_GROUP=%s\n' "${{ vars.AZURE_RESOURCE_GROUP }}" > .env
+          printf 'AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=%s\n' "${MODEL_NAME}" >> .env
+          printf 'BLOG_URL=%s\n' "${{ inputs.blog_url }}" >> .env
+          printf 'MAX_INPUT_CHARS=%s\n' "${{ inputs.max_input_chars }}" >> .env
+          printf 'OUTPUT_FOLDER=outputs\nLOG_LEVEL=INFO\n' >> .env
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
