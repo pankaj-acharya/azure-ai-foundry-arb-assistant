@@ -1,4 +1,4 @@
-name: Deploy Hosted Agent
+﻿name: Deploy Hosted Agent
 
 # ── Purpose ────────────────────────────────────────────────────────────────────
 # Deploys `arb-review-workflow-agent` (the Agent Framework ARB review workflow,
@@ -120,13 +120,60 @@ jobs:
 
       - name: Deploy hosted agent
         working-directory: ${{ env.AGENT_PROJECT_DIR }}
-        run: azd deploy --no-prompt
+        # azd deploy exits non-zero after its 30x10s client-side poll times
+        # out even when the server-side deploy succeeded. Use || true so the
+        # workflow does not fail here; the next step confirms actual readiness.
+        run: azd deploy --no-prompt || true
+
+      - name: Wait for agent to be invocable
+        # Poll the REST versions endpoint until the latest version is "active",
+        # then sleep 2 extra minutes for the invoke endpoint to catch up
+        # (it consistently lags behind the status field). Timeout: 15 min.
+        env:
+          FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          AGENT_NAME="arb-review-workflow-agent"
+          VERSIONS_URL="${FOUNDRY_PROJECT_ENDPOINT}/agents/${AGENT_NAME}/versions?api-version=v1"
+          DEADLINE=$(( $(date +%s) + 900 ))
+
+          echo "Polling for agent readiness (timeout 15 min)..."
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            TOKEN=$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)
+            HTTP_CODE=$(curl -s -o /tmp/agent-versions.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${TOKEN}" "$VERSIONS_URL")
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "API returned HTTP ${HTTP_CODE}, retrying..."
+              sleep 30
+              continue
+            fi
+            STATUS=$(jq -r '.data[0].status // "not_found"' /tmp/agent-versions.json)
+            echo "$(date -u '+%H:%M:%S')  latest version status: ${STATUS}"
+
+            if [ "$STATUS" = "active" ]; then
+              echo "Agent version is active. Waiting 2 min for invoke endpoint to sync..."
+              sleep 120
+              echo "Ready to invoke."
+              exit 0
+            fi
+
+            if [ "$STATUS" = "failed" ]; then
+              echo "::error::Agent version provisioning failed. Check the Foundry portal."
+              exit 1
+            fi
+
+            sleep 30
+          done
+
+          echo "::error::Timed out after 15 min waiting for agent to become invocable."
+          exit 1
 
       - name: Show agent status
         working-directory: ${{ env.AGENT_PROJECT_DIR }}
-        run: azd ai agent show --no-prompt
+        # Informational - do not fail the job on azd tooling quirks.
+        run: azd ai agent show --no-prompt || true
 
-      - name: Smoke test — invoke agent
+      - name: Smoke test - invoke agent
         if: ${{ inputs.run_smoke_test == 'true' }}
         working-directory: ${{ env.AGENT_PROJECT_DIR }}
         env:
