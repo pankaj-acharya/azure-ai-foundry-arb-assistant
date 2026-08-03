@@ -185,13 +185,19 @@ jobs:
         env:
           AGENT_TEST_PROMPT: ${{ inputs.test_prompt }}
         run: |
-          set -euo pipefail
+          set -uo pipefail  # -e removed; handle invoke exit code manually
 
           azd ai agent invoke "$AGENT_TEST_PROMPT" > /tmp/agent-response.txt 2>&1
+          INVOKE_EXIT=\True
 
-          echo "--- Agent response ---"
+          echo "--- Agent response (exit: \) ---"
           cat /tmp/agent-response.txt
           echo "--- End agent response ---"
+
+          if [ $INVOKE_EXIT -ne 0 ]; then
+            echo "::error::azd ai agent invoke failed with exit code \"
+            exit 1
+          fi
 
           if [ ! -s /tmp/agent-response.txt ]; then
             echo "::error::The agent returned an empty response."

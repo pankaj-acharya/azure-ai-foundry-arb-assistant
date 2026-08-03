@@ -8,8 +8,8 @@
 # environment. `azd ai agent run` / `azd deploy` auto-install this file (the
 # root requirements.txt) for the hosted agent service, so keep it scoped to
 # only what the hosted workflow actually imports.
-azure-identity
 --pre
+azure-identity
 agent-framework>=1.13.0
 agent-framework-foundry>=1.10.4
 agent-framework-foundry-hosting>=1.0.0b260730
