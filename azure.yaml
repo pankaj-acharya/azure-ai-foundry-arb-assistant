@@ -19,6 +19,10 @@ services:
         environmentVariables:
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
               value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+            # The workflow code calls _project_endpoint() at startup which reads
+            # this env var. Without it the container crashes on launch.
+            - name: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
+              value: https://ArchReviewAssistant.services.ai.azure.com/api/projects/proj_foundry_labs
         kind: hosted
         name: arb-review-workflow-agent
         protocols:
