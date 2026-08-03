@@ -1,4 +1,4 @@
-﻿name: Deploy Hosted Agent
+name: Deploy Hosted Agent
 
 # ── Purpose ────────────────────────────────────────────────────────────────────
 # Deploys `arb-review-workflow-agent` (the Agent Framework ARB review workflow,
@@ -152,6 +152,12 @@ jobs:
 
             if [ "$STATUS" = "active" ]; then
               echo "Agent version is active. Waiting 2 min for invoke endpoint to sync..."
+              # Set azd env vars so azd ai agent invoke can resolve the agent
+              # (azd deploy times out before writing these to the env file)
+              VERSION=$(jq -r '.data[0].id // "1"' /tmp/agent-versions.json)
+              azd env set AGENT_ARB_REVIEW_WORKFLOW_AGENT_NAME=arb-review-workflow-agent
+              azd env set "AGENT_ARB_REVIEW_WORKFLOW_AGENT_VERSION=${VERSION}"
+              echo "Registered: name=arb-review-workflow-agent, version=${VERSION}"
               sleep 120
               echo "Ready to invoke."
               exit 0
