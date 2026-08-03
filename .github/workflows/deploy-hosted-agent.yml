@@ -151,16 +151,34 @@ jobs:
             echo "$(date -u '+%H:%M:%S')  latest version status: ${STATUS}"
 
             if [ "$STATUS" = "active" ]; then
-              echo "Agent version is active. Waiting 2 min for invoke endpoint to sync..."
-              # Set azd env vars so azd ai agent invoke can resolve the agent
-              # (azd deploy times out before writing these to the env file)
               VERSION=$(jq -r '.data[0].id // "1"' /tmp/agent-versions.json)
               azd env set AGENT_ARB_REVIEW_WORKFLOW_AGENT_NAME=arb-review-workflow-agent
               azd env set "AGENT_ARB_REVIEW_WORKFLOW_AGENT_VERSION=${VERSION}"
               echo "Registered: name=arb-review-workflow-agent, version=${VERSION}"
-              sleep 120
-              echo "Ready to invoke."
-              exit 0
+
+              # Probe the invoke endpoint until it stops returning
+              # "still being provisioned" (container startup lag).
+              echo "Agent version active. Probing invoke endpoint (timeout 10 min)..."
+              INVOKE_DEADLINE=$(( $(date +%s) + 600 ))
+              while [ "$(date +%s)" -lt "$INVOKE_DEADLINE" ]; do
+                TOKEN=$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)
+                INVOKE_CODE=$(curl -s -o /tmp/invoke-probe.json -w "%{http_code}" \
+                  -X POST \
+                  -H "Authorization: Bearer ${TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{"messages":[{"role":"user","content":"ping"}]}' \
+                  "${FOUNDRY_PROJECT_ENDPOINT}/agents/${AGENT_NAME}/endpoint/protocols/openai/responses?api-version=v1")
+                INVOKE_MSG=$(jq -r '.error.message // "ok"' /tmp/invoke-probe.json)
+                echo "$(date -u '+%H:%M:%S')  invoke probe: HTTP ${INVOKE_CODE} — ${INVOKE_MSG:0:100}"
+                if echo "$INVOKE_MSG" | grep -qi "still being provisioned"; then
+                  sleep 30
+                  continue
+                fi
+                echo "Invoke endpoint is responsive."
+                exit 0
+              done
+              echo "::error::Timed out after 10 min waiting for invoke endpoint."
+              exit 1
             fi
 
             if [ "$STATUS" = "failed" ]; then
