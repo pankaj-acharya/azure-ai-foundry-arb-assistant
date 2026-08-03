@@ -410,6 +410,35 @@ Foundry portal's **Workflows** tab — it appears under **Agents** like the exis
 specialist/summarizer agents, and is invoked directly (`azd ai agent invoke` or the
 OpenAI Responses API) rather than run through the portal workflow UI.
 
+### CI/CD for the hosted agent
+
+**`.github/workflows/deploy-hosted-agent.yml`** (`workflow_dispatch` only) automates
+steps 4–5 above so the hosted agent no longer has to be deployed from a local machine.
+Run it whenever `src/agent_framework_workflow.py` / `src/hosted_arb_workflow.py`
+changes, or to redeploy `arb-review-workflow-agent` if it was ever removed from the
+Foundry portal. It:
+
+1. Installs `azd` (`Azure/setup-azd`) and the `azure.ai.agents` extension.
+2. Logs in via the same OIDC secrets used by `deploy-foundry-agents.yml`.
+3. Creates a fresh `azd` environment for the run (`.azure/` isn't committed, so CI
+   starts clean every time) and populates it with the existing project's known,
+   non-secret resource identifiers (subscription/tenant reused from secrets;
+   project/account/resource-group/location hardcoded to the already-provisioned
+   `proj_foundry_labs` project) plus the model deployment name from the existing
+   `AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME` repo variable.
+4. Runs `azd deploy --no-prompt`, then `azd ai agent show`.
+5. Optionally invokes the deployed agent as a smoke test (`run_smoke_test` input,
+   default `true`) and fails the job if the response is empty.
+
+No new GitHub secrets or variables are required — it reuses what
+`deploy-foundry-agents.yml` / `deploy-foundry-model.yml` already have configured.
+
+> ⚠️ If the `azd deploy` step fails with a permissions error, the workflow's service
+> principal likely needs the **Foundry User** and **Contributor** roles granted on the
+> `proj_foundry_labs` project specifically for hosted **code** deployments — this is a
+> separate requirement from whatever role already lets it manage the persistent
+> prompt agents.
+
 
 ## Future enhancements (optional, not implemented in v1)
 

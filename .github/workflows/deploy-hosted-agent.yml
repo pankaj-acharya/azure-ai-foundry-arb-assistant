@@ -1,0 +1,148 @@
+name: Deploy Hosted Agent
+
+# ── Purpose ────────────────────────────────────────────────────────────────────
+# Deploys `arb-review-workflow-agent` (the Agent Framework ARB review workflow,
+# hosted in Foundry via azd — see azure.yaml) to the Foundry Agent Service.
+#
+# This is separate from "Deploy Foundry Agents" (which manages the persistent
+# prompt agents: architecture/security/cost/resiliency/summarizer via the
+# azure-ai-projects SDK) and "Deploy Foundry Model" (serverless model
+# endpoints). Run this workflow after changing
+# src/agent_framework_workflow.py / src/hosted_arb_workflow.py, or to
+# redeploy the hosted agent if it was removed from the Foundry portal.
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_smoke_test:
+        description: "Invoke the deployed agent after deploy (costs ~5 LLM calls / ~1-2 min)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      test_prompt:
+        description: "Smoke-test prompt to send via `azd ai agent invoke`"
+        required: false
+        default: "Review this design: a public web app with a single Azure SQL Database instance and no backups configured."
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AGENT_PROJECT_DIR: .
+  AZD_ENV_NAME: gh-actions
+
+jobs:
+  deploy-and-test:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+      AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Azure Developer CLI
+        uses: Azure/setup-azd@v2
+
+      - name: Install azd Foundry agents extension
+        run: |
+          set -euo pipefail
+          azd extension install azure.ai.agents
+
+      - name: Verify azd Foundry agents extension
+        run: |
+          set -euo pipefail
+          azd extension list --installed | grep -q "azure.ai.agents"
+          azd ai agent --help > /dev/null
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure azd authentication
+        run: |
+          set -euo pipefail
+          azd config set auth.useAzCliAuth true
+          azd config set defaults.subscription "${AZURE_SUBSCRIPTION_ID}"
+
+      - name: Configure deployment environment
+        working-directory: ${{ env.AGENT_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+
+          # Fresh azd environment every run — .azure/ is gitignored so nothing
+          # persists between CI runs.
+          azd env new "$AZD_ENV_NAME" --no-prompt
+
+          # Reuse the existing Foundry project (proj_foundry_labs) — same
+          # resource IDs used by the local azd deploy that first published
+          # this agent. Non-secret resource identifiers are hardcoded below
+          # since they are stable and not sensitive.
+          azd env set AZURE_SUBSCRIPTION_ID "${AZURE_SUBSCRIPTION_ID}"
+          azd env set AZURE_TENANT_ID "${AZURE_TENANT_ID}"
+          azd env set AZURE_LOCATION "eastus"
+          azd env set AZURE_RESOURCE_GROUP "${AZURE_RESOURCE_GROUP}"
+          azd env set AZURE_AI_ACCOUNT_NAME "ArchReviewAssistant"
+          azd env set AZURE_AI_PROJECT_NAME "proj_foundry_labs"
+          azd env set AZURE_AI_PROJECT_ID "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.CognitiveServices/accounts/ArchReviewAssistant/projects/proj_foundry_labs"
+          azd env set AZURE_AI_DEPLOYMENTS_LOCATION "eastus"
+          azd env set FOUNDRY_PROJECT_ENDPOINT "${AZURE_AI_FOUNDRY_PROJECT_ENDPOINT}"
+          azd env set USE_EXISTING_AI_PROJECT "true"
+          azd env set ENABLE_HOSTED_AGENTS "true"
+          azd env set ENABLE_CAPABILITY_HOST "false"
+          azd env set AZD_AGENT_SKIP_ACR "true"
+
+          # Model deployment name — reuse the repo variable already used by
+          # deploy-foundry-agents.yml, normalized to azd's hyphenated form
+          # (e.g. "gpt-5.4" -> "gpt-5-4").
+          MODEL_NAME_VALUE="${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}"
+          if [[ -z "$MODEL_NAME_VALUE" ]]; then
+            echo "::error::AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME repo variable is not set."
+            exit 1
+          fi
+          azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "${MODEL_NAME_VALUE//./-}"
+
+          azd env get-values
+
+      - name: Deploy hosted agent
+        working-directory: ${{ env.AGENT_PROJECT_DIR }}
+        run: azd deploy --no-prompt
+
+      - name: Show agent status
+        working-directory: ${{ env.AGENT_PROJECT_DIR }}
+        run: azd ai agent show --no-prompt
+
+      - name: Smoke test — invoke agent
+        if: ${{ inputs.run_smoke_test == 'true' }}
+        working-directory: ${{ env.AGENT_PROJECT_DIR }}
+        env:
+          AGENT_TEST_PROMPT: ${{ inputs.test_prompt }}
+        run: |
+          set -euo pipefail
+
+          azd ai agent invoke "$AGENT_TEST_PROMPT" > /tmp/agent-response.txt 2>&1
+
+          echo "--- Agent response ---"
+          cat /tmp/agent-response.txt
+          echo "--- End agent response ---"
+
+          if [ ! -s /tmp/agent-response.txt ]; then
+            echo "::error::The agent returned an empty response."
+            exit 1
+          fi
+
+          echo "Smoke test passed."
