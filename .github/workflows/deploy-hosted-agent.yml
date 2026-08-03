@@ -118,6 +118,15 @@ jobs:
 
           azd env get-values
 
+      - name: Pre-install Python dependencies (bundled deploy)
+        working-directory: ${{ env.AGENT_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          # bundled dependencyResolution: packages must be present locally so
+          # azd deploy can include them in the upload bundle.
+          pip install --pre -r requirements.txt --target packages/
+          echo "Pre-installed $(ls packages/ | wc -l) top-level package entries."
+
       - name: Deploy hosted agent
         working-directory: ${{ env.AGENT_PROJECT_DIR }}
         # azd deploy exits non-zero after its 30x10s client-side poll times
@@ -159,7 +168,7 @@ jobs:
               # Probe the invoke endpoint until it stops returning
               # "still being provisioned" (container startup lag).
               echo "Agent version active. Probing invoke endpoint (timeout 10 min)..."
-              INVOKE_DEADLINE=$(( $(date +%s) + 600 ))
+              INVOKE_DEADLINE=$(( $(date +%s) + 900 ))
               while [ "$(date +%s)" -lt "$INVOKE_DEADLINE" ]; do
                 TOKEN=$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)
                 INVOKE_CODE=$(curl -s -o /tmp/invoke-probe.json -w "%{http_code}" \
@@ -177,7 +186,7 @@ jobs:
                 echo "Invoke endpoint is responsive."
                 exit 0
               done
-              echo "::error::Timed out after 10 min waiting for invoke endpoint."
+              echo "::error::Timed out after 15 min waiting for invoke endpoint."
               exit 1
             fi
 
