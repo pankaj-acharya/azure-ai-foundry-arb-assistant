@@ -9,7 +9,7 @@ services:
         uses:
             - proj_foundry_labs
         codeConfiguration:
-            dependencyResolution: bundled
+            dependencyResolution: remote_build
             entryPoint: src/hosted_arb_workflow.py
             runtime: python_3_13
         container:

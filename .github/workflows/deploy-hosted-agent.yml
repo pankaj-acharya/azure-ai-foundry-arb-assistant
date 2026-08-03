@@ -118,15 +118,6 @@ jobs:
 
           azd env get-values
 
-      - name: Pre-install Python dependencies (bundled deploy)
-        working-directory: ${{ env.AGENT_PROJECT_DIR }}
-        run: |
-          set -euo pipefail
-          # bundled dependencyResolution: packages must be present locally so
-          # azd deploy can include them in the upload bundle.
-          pip install --pre -r requirements.txt --target packages/
-          echo "Pre-installed $(ls packages/ | wc -l) top-level package entries."
-
       - name: Deploy hosted agent
         working-directory: ${{ env.AGENT_PROJECT_DIR }}
         # azd deploy exits non-zero after its 30x10s client-side poll times
@@ -179,7 +170,7 @@ jobs:
                   "${FOUNDRY_PROJECT_ENDPOINT}/agents/${AGENT_NAME}/endpoint/protocols/openai/responses?api-version=v1")
                 INVOKE_MSG=$(jq -r '.error.message // "ok"' /tmp/invoke-probe.json)
                 echo "$(date -u '+%H:%M:%S')  invoke probe: HTTP ${INVOKE_CODE} — ${INVOKE_MSG:0:100}"
-                if echo "$INVOKE_MSG" | grep -qi "still being provisioned"; then
+                if echo "$INVOKE_MSG" | grep -qiE "still being provisioned|session.*not.*ready|did not become ready"; then
                   sleep 30
                   continue
                 fi
