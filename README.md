@@ -116,9 +116,9 @@ Copy `.env.example` to `.env` and set values:
 AZURE_SUBSCRIPTION_ID=
 AZURE_TENANT_ID=
 AZURE_RESOURCE_GROUP=
-AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=
-AZURE_AI_FOUNDRY_PROJECT_NAME=
-AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=gpt-4.1-mini
+AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=https://hello-world-arb-demo-resource.services.ai.azure.com/api/projects/hello-world-arb-demo
+AZURE_AI_FOUNDRY_PROJECT_NAME=hello-world-arb-demo
+AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME=claude-opus-5-5
 BLOG_URL=https://<your-public-blog-or-github-pages-url>
 MAX_INPUT_CHARS=12000
 OUTPUT_FOLDER=outputs
@@ -369,9 +369,9 @@ curl -s http://localhost:8088/responses \
 
 ### Deploying as a Foundry hosted agent
 
-Deployed via `azd ai agent` tooling. `azure.yaml` (already in this repo) targets the
-existing Foundry project and reuses the `gpt-5-4` model deployment — no new infra or
-paid model deployment needed. Always prefix `azd` commands with
+Deployed via `azd ai agent` tooling. `azure.yaml` targets the existing
+`hello-world-arb-demo` Foundry project and uses its `claude-opus-5-5` model deployment.
+Always prefix `azd` commands with
 `AZURE_DEV_USER_AGENT=microsoft_foundry_skill` (inline only — never persist it into
 `azd env set`, `.env`, or `azure.yaml`):
 
@@ -382,9 +382,18 @@ paid model deployment needed. Always prefix `azd` commands with
      --src . --agent-name arb-review-workflow-agent \
      --project-id "<existing-Foundry-project-ARM-id>" \
      --deploy-mode code --runtime python_3_13 \
-     --entry-point src/hosted_arb_workflow.py --model-deployment gpt-5-4
+     --entry-point src/hosted_arb_workflow.py --model-deployment claude-opus-5-5
    ```
-2. **Provision** (already done — reuses the existing project, no new resources created):
+   For local `azd` runs, set the selected existing project endpoint and model in
+   the active azd environment:
+   ```bash
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd env set FOUNDRY_PROJECT_ENDPOINT \
+     "https://hello-world-arb-demo-resource.services.ai.azure.com/api/projects/hello-world-arb-demo"
+   AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME \
+     "claude-opus-5-5"
+   ```
+2. **Provision** only if the azd environment still needs configuration; this project
+   already exists, so do not provision new Azure resources just to deploy the agent:
    ```bash
    AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd provision
    ```
@@ -421,21 +430,24 @@ Foundry portal. It:
 1. Installs `azd` (`Azure/setup-azd`) and the `azure.ai.agents` extension.
 2. Logs in via the same OIDC secrets used by `deploy-foundry-agents.yml`.
 3. Creates a fresh `azd` environment for the run (`.azure/` isn't committed, so CI
-   starts clean every time) and populates it with the existing project's known,
-   non-secret resource identifiers (subscription/tenant reused from secrets;
-   project/account/resource-group/location hardcoded to the already-provisioned
-   `proj_foundry_labs` project) plus the model deployment name from the existing
-   `AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME` repo variable.
+   starts clean every time), derives the account/project names from the endpoint
+   input, and uses the subscription/tenant secrets, `AZURE_RESOURCE_GROUP` repository
+   variable, and model deployment and Azure location inputs.
 4. Runs `azd deploy --no-prompt`, then `azd ai agent show`.
 5. Optionally invokes the deployed agent as a smoke test (`run_smoke_test` input,
    default `true`) and fails the job if the response is empty.
 
-No new GitHub secrets or variables are required — it reuses what
-`deploy-foundry-agents.yml` / `deploy-foundry-model.yml` already have configured.
+The hosted-agent workflow takes the project endpoint, model deployment name, and
+Azure location as manual-run inputs. Configure the Azure OIDC secrets
+(`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) and the
+`AZURE_RESOURCE_GROUP` repository variable. The service principal needs permission
+to deploy hosted agents to the Foundry project. On a new project, first run
+`.github/workflows/deploy-foundry-agents.yml` to create the four specialist agents
+and summarizer that this hosted workflow calls; then run `deploy-hosted-agent.yml`.
 
 > ⚠️ If the `azd deploy` step fails with a permissions error, the workflow's service
 > principal likely needs the **Foundry User** and **Contributor** roles granted on the
-> `proj_foundry_labs` project specifically for hosted **code** deployments — this is a
+> `hello-world-arb-demo` project specifically for hosted **code** deployments — this is a
 > separate requirement from whatever role already lets it manage the persistent
 > prompt agents.
 

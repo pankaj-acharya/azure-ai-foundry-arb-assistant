@@ -16,6 +16,7 @@ questions about foundry agents, read the microsoft-foundry skill first.
   Framework hosted workflow" section for why: Foundry's portal Workflows tab is retiring
   Dec 1, 2026 and doesn't support persistent/hosted agents as nodes). Scaffolded as an
   `azd ai agent` hosted agent (`azure.yaml` service `arb-review-workflow-agent`,
-  `host: azure.ai.agent`) targeting the existing Foundry project `proj_foundry_labs` under
-  account `ArchReviewAssistant` (resource group `lab_arch_review_agent`), reusing the
-  existing `gpt-5-4` model deployment.
+  `host: azure.ai.agent`) targeting the existing Foundry project
+  `hello-world-arb-demo` at
+  `https://hello-world-arb-demo-resource.services.ai.azure.com/api/projects/hello-world-arb-demo`,
+  using the `claude-opus-5-5` model deployment.

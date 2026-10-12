@@ -15,6 +15,20 @@ name: Deploy Hosted Agent
 on:
   workflow_dispatch:
     inputs:
+      project_endpoint:
+        description: "Foundry project endpoint"
+        required: true
+        default: "https://hello-world-arb-demo-resource.services.ai.azure.com/api/projects/hello-world-arb-demo"
+        type: string
+      model_deployment_name:
+        description: "Existing model deployment name"
+        required: true
+        default: "claude-opus-5-5"
+        type: string
+      azure_location:
+        description: "Azure region used by the Foundry project"
+        required: true
+        type: string
       run_smoke_test:
         description: "Invoke the deployed agent after deploy (costs ~5 LLM calls / ~1-2 min)"
         required: true
@@ -44,8 +58,9 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
-      AZURE_AI_FOUNDRY_PROJECT_NAME: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_NAME }}
+      AZURE_AI_FOUNDRY_PROJECT_ENDPOINT: ${{ inputs.project_endpoint }}
+      AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME: ${{ inputs.model_deployment_name }}
+      AZURE_LOCATION: ${{ inputs.azure_location }}
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
 
     steps:
@@ -88,30 +103,36 @@ jobs:
           # persists between CI runs.
           azd env new "$AZD_ENV_NAME" --no-prompt
 
-          # Reuse the existing Foundry project (proj_foundry_labs) — same
-          # resource IDs used by the local azd deploy that first published
-          # this agent. Non-secret resource identifiers are hardcoded below
-          # since they are stable and not sensitive.
+          # Reuse the existing Foundry project. Derive account and project names
+          # from the supplied endpoint rather than hardcoding either identifier.
           azd env set AZURE_SUBSCRIPTION_ID "${AZURE_SUBSCRIPTION_ID}"
           azd env set AZURE_TENANT_ID "${AZURE_TENANT_ID}"
-          azd env set AZURE_LOCATION "eastus"
+          azd env set AZURE_LOCATION "${AZURE_LOCATION}"
           azd env set AZURE_RESOURCE_GROUP "${AZURE_RESOURCE_GROUP}"
-          azd env set AZURE_AI_ACCOUNT_NAME "ArchReviewAssistant"
-          azd env set AZURE_AI_PROJECT_NAME "proj_foundry_labs"
-          azd env set AZURE_AI_PROJECT_ID "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.CognitiveServices/accounts/ArchReviewAssistant/projects/proj_foundry_labs"
-          azd env set AZURE_AI_DEPLOYMENTS_LOCATION "eastus"
+          if [[ -z "${AZURE_RESOURCE_GROUP}" ]]; then
+            echo "::error::Set the AZURE_RESOURCE_GROUP repository variable to the resource group containing the Foundry project."
+            exit 1
+          fi
+          PROJECT_ACCOUNT_NAME="$(python -c 'import os; from urllib.parse import urlparse; print((urlparse(os.environ["AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"]).hostname or "").split(".", 1)[0])')"
+          PROJECT_NAME="$(python -c 'import os; from urllib.parse import urlparse; from pathlib import PurePosixPath; print(PurePosixPath(urlparse(os.environ["AZURE_AI_FOUNDRY_PROJECT_ENDPOINT"]).path.rstrip("/")).name)')"
+          if [[ -z "${PROJECT_ACCOUNT_NAME}" || -z "${PROJECT_NAME}" ]]; then
+            echo "::error::The project endpoint must contain an account hostname and /api/projects/<project-name> path."
+            exit 1
+          fi
+          azd env set AZURE_AI_ACCOUNT_NAME "${PROJECT_ACCOUNT_NAME}"
+          azd env set AZURE_AI_PROJECT_NAME "${PROJECT_NAME}"
+          azd env set AZURE_AI_PROJECT_ID "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.CognitiveServices/accounts/${PROJECT_ACCOUNT_NAME}/projects/${PROJECT_NAME}"
+          azd env set AZURE_AI_DEPLOYMENTS_LOCATION "${AZURE_LOCATION}"
           azd env set FOUNDRY_PROJECT_ENDPOINT "${AZURE_AI_FOUNDRY_PROJECT_ENDPOINT}"
           azd env set USE_EXISTING_AI_PROJECT "true"
           azd env set ENABLE_HOSTED_AGENTS "true"
           azd env set ENABLE_CAPABILITY_HOST "false"
           azd env set AZD_AGENT_SKIP_ACR "true"
 
-          # Model deployment name — reuse the repo variable already used by
-          # deploy-foundry-agents.yml, normalized to azd's hyphenated form
-          # (e.g. "gpt-5.4" -> "gpt-5-4").
-          MODEL_NAME_VALUE="${{ vars.AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME }}"
+          # Normalize dotted model names to Azure deployment-name form.
+          MODEL_NAME_VALUE="${AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME}"
           if [[ -z "$MODEL_NAME_VALUE" ]]; then
-            echo "::error::AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME repo variable is not set."
+            echo "::error::Set the model_deployment_name workflow input to an existing model deployment."
             exit 1
           fi
           azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "${MODEL_NAME_VALUE//./-}"
@@ -130,7 +151,7 @@ jobs:
         # then sleep 2 extra minutes for the invoke endpoint to catch up
         # (it consistently lags behind the status field). Timeout: 15 min.
         env:
-          FOUNDRY_PROJECT_ENDPOINT: ${{ secrets.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
+          FOUNDRY_PROJECT_ENDPOINT: ${{ env.AZURE_AI_FOUNDRY_PROJECT_ENDPOINT }}
         run: |
           set -euo pipefail
           AGENT_NAME="arb-review-workflow-agent"

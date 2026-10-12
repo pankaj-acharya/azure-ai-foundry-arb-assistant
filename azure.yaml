@@ -7,7 +7,7 @@ services:
         host: azure.ai.agent
         language: python
         uses:
-            - proj_foundry_labs
+            - hello-world-arb-demo
         codeConfiguration:
             dependencyResolution: remote_build
             entryPoint: src/hosted_arb_workflow.py
@@ -22,14 +22,14 @@ services:
             # The workflow code calls _project_endpoint() at startup which reads
             # this env var. Without it the container crashes on launch.
             - name: AZURE_AI_FOUNDRY_PROJECT_ENDPOINT
-              value: https://ArchReviewAssistant.services.ai.azure.com/api/projects/proj_foundry_labs
+              value: ${FOUNDRY_PROJECT_ENDPOINT}
         kind: hosted
         name: arb-review-workflow-agent
         protocols:
             - protocol: responses
               version: 2.0.0
-    proj_foundry_labs:
+    hello-world-arb-demo:
         host: azure.ai.project
-        endpoint: https://ArchReviewAssistant.services.ai.azure.com/api/projects/proj_foundry_labs
+        endpoint: ${FOUNDRY_PROJECT_ENDPOINT}
 infra:
     provider: microsoft.foundry

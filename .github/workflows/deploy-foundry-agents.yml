@@ -38,7 +38,7 @@ on:
       model_deployment_name:
         description: "Model deployment to use for agents"
         required: false
-        default: "gpt-5.4"
+        default: "claude-opus-5-5"
         type: choice
         options:
           - gpt-5.4
@@ -50,6 +50,7 @@ on:
           - claude-opus-4.8
           - claude-sonnet-5
           - claude-opus-5
+          - claude-opus-5-5
       agent_action:
         description: "Action to perform on agents"
         required: false
